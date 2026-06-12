@@ -1,0 +1,11 @@
+{
+  "well_id": "ED-001H",
+  "api_number": "42-109-12345",
+  "field": "Delaware Basin",
+  "operator": "Synthetic Operator LLC",
+  "intervention": "acid_stimulation",
+  "primary_diagnosis": "ESP-lifted well 990 days on production showing scale signature (motor amps +26% over nameplate, intake pressure declining 38→31 psi over 5 days) combined with low intake driving operation below POR floor. Scale treatment must precede any mechanical work to prevent ESP re-failure within 6 months.",
+  "incremental_rate_bopd": 130,
+  "expected_uplift_decline_per_yr": 0.75,
+  "requested_by": "Eric Diaz, Staff Production Engineer"
+}

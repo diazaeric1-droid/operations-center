@@ -1,0 +1,215 @@
+{
+  "n": 24,
+  "accuracy": 0.9166666666666666,
+  "per_class": {
+    "artificial_lift": {
+      "precision": 1.0,
+      "recall": 0.8333333333333334,
+      "f1": 0.9090909090909091,
+      "support": 12
+    },
+    "surface_facility": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 3
+    },
+    "power": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 1
+    },
+    "gathering_thirdparty": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 4
+    },
+    "wellbore": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 3
+    },
+    "reservoir": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 1
+    },
+    "unclassified": {
+      "precision": 0.0,
+      "recall": null,
+      "f1": null,
+      "support": 0
+    }
+  },
+  "confusion": {
+    "wellbore": {
+      "wellbore": 3
+    },
+    "artificial_lift": {
+      "unclassified": 2,
+      "artificial_lift": 10
+    },
+    "surface_facility": {
+      "surface_facility": 3
+    },
+    "gathering_thirdparty": {
+      "gathering_thirdparty": 4
+    },
+    "power": {
+      "power": 1
+    },
+    "reservoir": {
+      "reservoir": 1
+    }
+  },
+  "cases": [
+    {
+      "note": "sand production, choked back",
+      "true": "wellbore",
+      "pred": "wellbore",
+      "match": true
+    },
+    {
+      "note": "well down, see foreman",
+      "true": "artificial_lift",
+      "pred": "unclassified",
+      "match": false
+    },
+    {
+      "note": "well down, see foreman",
+      "true": "artificial_lift",
+      "pred": "unclassified",
+      "match": false
+    },
+    {
+      "note": "pump off, low fillage, tuning the POC",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "compressor down, no gas takeaway off the pad",
+      "true": "surface_facility",
+      "pred": "surface_facility",
+      "match": true
+    },
+    {
+      "note": "gas plant down, midstream curtailment",
+      "true": "gathering_thirdparty",
+      "pred": "gathering_thirdparty",
+      "match": true
+    },
+    {
+      "note": "heater treater tripped on high level, emulsion upset",
+      "true": "surface_facility",
+      "pred": "surface_facility",
+      "match": true
+    },
+    {
+      "note": "scale buildup restricting flow",
+      "true": "wellbore",
+      "pred": "wellbore",
+      "match": true
+    },
+    {
+      "note": "ESP tripped on underload, VSD fault F012, waiting on electrician",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "downhole pump worn, no fluid over pump",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "transformer failure, utility en route",
+      "true": "power",
+      "pred": "power",
+      "match": true
+    },
+    {
+      "note": "pressure depletion, declining inflow",
+      "true": "reservoir",
+      "pred": "reservoir",
+      "match": true
+    },
+    {
+      "note": "compressor down, no gas takeaway off the pad",
+      "true": "surface_facility",
+      "pred": "surface_facility",
+      "match": true
+    },
+    {
+      "note": "gas lift unstable, well heading, adjusting injection",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "gas plant down, midstream curtailment",
+      "true": "gathering_thirdparty",
+      "pred": "gathering_thirdparty",
+      "match": true
+    },
+    {
+      "note": "sand production, choked back",
+      "true": "wellbore",
+      "pred": "wellbore",
+      "match": true
+    },
+    {
+      "note": "downhole pump worn, no fluid over pump",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "high line pressure from gathering, curtailed",
+      "true": "gathering_thirdparty",
+      "pred": "gathering_thirdparty",
+      "match": true
+    },
+    {
+      "note": "high line pressure from gathering, curtailed",
+      "true": "gathering_thirdparty",
+      "pred": "gathering_thirdparty",
+      "match": true
+    },
+    {
+      "note": "downhole pump worn, no fluid over pump",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "pump off, low fillage, tuning the POC",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "downhole pump worn, no fluid over pump",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "pump off, low fillage, tuning the POC",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    },
+    {
+      "note": "rod string parted, pulling unit scheduled Tuesday",
+      "true": "artificial_lift",
+      "pred": "artificial_lift",
+      "match": true
+    }
+  ]
+}

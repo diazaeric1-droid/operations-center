@@ -1,0 +1,66 @@
+{
+  "event_precision": 0.8,
+  "event_recall": 1.0,
+  "event_f1": 0.889,
+  "tp": 4,
+  "fp": 1,
+  "fn": 0,
+  "duration_mae_days": 0.0,
+  "mean_latency_days": 0.0,
+  "outage10_ongoing_on_day5": true,
+  "outage10_open_every_day": true,
+  "n_injected_outages": 4,
+  "n_decoy_negatives": 3,
+  "n_decoy_clean_negatives": 2,
+  "n_decoy_spurious_positives": 1,
+  "per_outage": {
+    "well_out10": {
+      "injected_duration": 10,
+      "opened": true,
+      "observed_duration": 10,
+      "latency_days": 0,
+      "states_during_outage": [
+        "NEW",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING",
+        "ONGOING"
+      ]
+    },
+    "well_out07": {
+      "injected_duration": 7,
+      "opened": true,
+      "observed_duration": 7,
+      "latency_days": 0
+    },
+    "well_out05": {
+      "injected_duration": 5,
+      "opened": true,
+      "observed_duration": 5,
+      "latency_days": 0
+    },
+    "well_out03": {
+      "injected_duration": 3,
+      "opened": true,
+      "observed_duration": 3,
+      "latency_days": 0
+    },
+    "well_dec_decline": {
+      "injected_duration": 0,
+      "opened": false
+    },
+    "well_dec_dip": {
+      "injected_duration": 0,
+      "opened": false
+    },
+    "well_dec_recal": {
+      "injected_duration": 0,
+      "opened": true
+    }
+  }
+}

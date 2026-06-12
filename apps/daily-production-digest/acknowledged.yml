@@ -1,0 +1,12 @@
+# Acknowledged / suppressed events — known or planned situations that should NOT
+# re-fire as fresh HIGH items every morning (alarm-fatigue control). Matched by
+# well_id; an omitted or '*' category suppresses any category for that well.
+#
+#   - well: well_028
+#     category: runtime_degradation   # optional; omit or '*' = any category
+#     note: planned ESP workover scheduled 2026-06-05 (PE: E. Diaz)
+#     suppress_until: 2026-06-06
+
+- well: well_028
+  category: runtime_degradation
+  note: planned ESP workover 2026-06-05 — already in the queue, don't re-flag

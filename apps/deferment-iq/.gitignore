@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.streamlit/secrets.toml
+data/synthetic/wells/
+data/synthetic/events.csv
+# Real NDIC extract is user-supplied; only the template + README are tracked.
+data/real/ndic/production.csv
+.DS_Store

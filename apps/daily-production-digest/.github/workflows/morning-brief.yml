@@ -1,0 +1,52 @@
+name: Daily Morning Brief
+
+on:
+  schedule:
+    # 11:30 UTC = 6:30am US Central during CDT (summer, UTC-5). GitHub cron is fixed
+    # UTC with no DST handling, so during CST (winter, UTC-6) this lands at 5:30am
+    # Central. Adjust to "30 12" if you'd rather be an hour late in summer than early
+    # in winter. Runs every weekday.
+    - cron: "30 11 * * 1-5"
+  workflow_dispatch: {}  # allow manual trigger
+
+permissions:
+  contents: write  # commit the brief back to the repo
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install --upgrade pip
+          pip install -e .
+      - name: Generate synthetic fleet (placeholder — replace with real connector)
+        run: python data/synthetic/generate_fleet.py
+      - name: Run brief
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m src.scheduler --verbose
+      - name: Commit brief
+        run: |
+          git config user.name "Daily Brief Bot"
+          git config user.email "actions@github.com"
+          git add briefs/
+          git diff --staged --quiet || git commit -m "Daily brief $(date -u +%Y-%m-%d)"
+          git push
+      - name: Notify Slack on HIGH-priority anomalies
+        # Optional: only runs if a SLACK_WEBHOOK_URL secret is configured. Posts the
+        # brief's "Top Priorities" section so the asset team sees HIGH items in-channel.
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          brief="briefs/$(date -u +%Y-%m-%d).md"
+          if [ -f "$brief" ] && grep -q "deferred and at risk" "$brief"; then
+            summary=$(sed -n '/## Bottom Line/,/## Field Status/p' "$brief" | sed '1d;$d')
+            payload=$(python -c "import json,sys; print(json.dumps({'text': 'Daily Production Brief — HIGH items\n' + sys.argv[1]}))" "$summary")
+            curl -sf -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" || echo "Slack post failed (non-fatal)"
+          fi

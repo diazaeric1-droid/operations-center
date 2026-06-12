@@ -1,0 +1,48 @@
+{
+  "n_wells": 24,
+  "n_months": 8,
+  "seed": 7,
+  "daily": {
+    "n_records": 5832,
+    "engine": {
+      "total_deferred_bbl": 87310.62180000001,
+      "downtime_bbl": 64724.0017,
+      "underperf_bbl": 22586.6201,
+      "recoverable_bbl": 49732.40639999999
+    },
+    "truth": {
+      "total_deferred_bbl": 87310.62108561199,
+      "downtime_bbl": 64724.00183470052,
+      "underperf_bbl": 22586.61925091148,
+      "recoverable_bbl": 49732.404592995095
+    },
+    "err_pct": {
+      "total_deferred": 8.182143389531562e-07,
+      "downtime": -2.0811524710606955e-07,
+      "underperf": 3.759254582921259e-06,
+      "recoverable": 3.6334557157681966e-06
+    }
+  },
+  "monthly": {
+    "n_records": 192,
+    "engine": {
+      "total_deferred_bbl": 64724.002348830516,
+      "downtime_bbl": 64724.00192111931,
+      "underperf_bbl": 0.000427711216559601,
+      "recoverable_bbl": 35818.214790367936
+    },
+    "truth": {
+      "total_deferred_bbl": 87310.62108561199,
+      "downtime_bbl": 64724.00183470052,
+      "underperf_bbl": 22586.61925091148,
+      "recoverable_bbl": 49732.404592995095
+    },
+    "err_pct": {
+      "total_deferred": -25.86926820121263,
+      "downtime": 1.3351892208288943e-07,
+      "underperf": -99.99999810635131,
+      "recoverable": -27.97811591154593
+    }
+  },
+  "downtime_cadence_gap_pct": 3.4163416989995176e-07
+}

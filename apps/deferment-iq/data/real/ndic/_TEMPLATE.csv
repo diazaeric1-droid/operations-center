@@ -1,0 +1,3 @@
+well_id,well_name,operator,field,formation,date,oil_bbl,gas_mcf,water_bbl,days
+DEMO_0001,EXAMPLE FAKE 1-23H (placeholder),DEMO OPERATOR LLC,DEMO FIELD,Bakken,2024-01,1000,500,400,28
+DEMO_0001,EXAMPLE FAKE 1-23H (placeholder),DEMO OPERATOR LLC,DEMO FIELD,Bakken,2024-02,900,450,420,20

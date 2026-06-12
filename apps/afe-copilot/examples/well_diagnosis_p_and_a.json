@@ -1,0 +1,11 @@
+{
+  "well_id": "ED-020H",
+  "api_number": "42-109-15020",
+  "field": "Permian marginal",
+  "operator": "Synthetic Operator LLC",
+  "intervention": "p_and_a",
+  "primary_diagnosis": "21-year-old Spraberry well producing 3.5 BOPD steady-state with 96% water cut. Workover OPEX would exceed expected revenue at current strip. RRC W-3 filing in progress; well meets all P&A criteria. Plug per RRC Rule 14, restore surface, release bond.",
+  "incremental_rate_bopd": 0,
+  "expected_uplift_decline_per_yr": 0,
+  "requested_by": "Eric Diaz, Staff Production Engineer"
+}

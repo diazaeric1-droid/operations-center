@@ -1,0 +1,29 @@
+# environment / tooling
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.streamlit/secrets.toml
+.DS_Store
+
+# regenerated artifacts (bootstrap recreates all of these on first run —
+# mirrors the vendored components' own .gitignore data paths)
+apps/daily-production-digest/data/synthetic/fleet/
+apps/daily-production-digest/briefs/events.db
+apps/daily-production-digest/briefs/events.db-*
+apps/daily-production-digest/briefs/*.md
+!apps/daily-production-digest/briefs/sample.md
+apps/deferment-iq/data/synthetic/wells/
+apps/deferment-iq/data/synthetic/events.csv
+apps/deferment-iq/data/real/ndic/production.csv
+apps/esp-failure-risk-agent/artifacts/
+apps/esp-failure-risk-agent/data/synthetic/*.csv
+apps/esp-failure-risk-agent/data/synthetic/labels.csv
+apps/afe-copilot/drafts/
+apps/afe-copilot/pipeline.sqlite

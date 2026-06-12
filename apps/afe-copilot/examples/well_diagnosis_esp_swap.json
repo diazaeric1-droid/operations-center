@@ -1,0 +1,11 @@
+{
+  "well_id": "ED-024H",
+  "api_number": "42-109-15024",
+  "field": "Midland Basin",
+  "operator": "Synthetic Operator LLC",
+  "intervention": "esp_swap",
+  "primary_diagnosis": "ESP operating below POR floor (1,580 bfpd vs. 1,800 minimum). No scale signal (intake pressure stable at 95 psi, amps within nameplate). Right-sized pump (target POR 1,200-2,000 bfpd) required to restore optimal lift and prevent downthrust damage.",
+  "incremental_rate_bopd": 95,
+  "expected_uplift_decline_per_yr": 0.6,
+  "requested_by": "Eric Diaz, Staff Production Engineer"
+}
