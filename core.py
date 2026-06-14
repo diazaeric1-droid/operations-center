@@ -28,6 +28,7 @@ import importlib
 import importlib.util
 import io
 import os
+import re
 import runpy
 import sys
 from pathlib import Path
@@ -107,9 +108,32 @@ DEF_SRC_UPLOAD = "upload"        # user-uploaded tidy monthly CSV (session only)
 
 # ---- bootstrap (data + model are .gitignore'd, so regenerate on first run) ----
 
+def _expected_fleet_size() -> int:
+    """Well count the digest generator declares. Lets bootstrap detect a STALE
+    on-disk fleet after the generator changes — the fleet CSVs are gitignored and a
+    warm Streamlit container (or an existing checkout) keeps the OLD fleet otherwise,
+    so a 50→100 change would never take effect without this check."""
+    try:
+        txt = (APP_DIRS["digest"] / "data" / "synthetic"
+               / "generate_fleet.py").read_text()
+        m = re.search(r"^N_WELLS\s*=\s*(\d+)", txt, re.M)
+        return int(m.group(1)) if m else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def ensure_digest_data(log=print) -> None:
-    if not any(DIGEST_FLEET.glob("well_*.csv")):
-        log("Generating synthetic SCADA fleet (digest)…")
+    existing = sorted(DIGEST_FLEET.glob("well_*.csv"))
+    expected = _expected_fleet_size()
+    stale = bool(expected) and len(existing) != expected
+    if not existing or stale:
+        if stale:
+            log(f"SCADA fleet is stale ({len(existing)} wells on disk; generator "
+                f"declares {expected}) — regenerating…")
+            for p in existing:
+                p.unlink()
+        else:
+            log("Generating synthetic SCADA fleet (digest)…")
         runpy.run_path(str(APP_DIRS["digest"] / "data" / "synthetic" / "generate_fleet.py"),
                        run_name="__main__")
 
