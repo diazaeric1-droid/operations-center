@@ -27,7 +27,7 @@ from theme import (  # re-exported so views need a single import
     NAVY, BLUE, RED, GREEN, AMBER, PURPLE, TEAL, GREY, COLORWAY, CITATIONS,
 )
 
-PRODUCT_VERSION = "0.1.0"
+PRODUCT_VERSION = "0.2.0"
 
 # The three consolidated operator products. Each entry:
 #   (key, display name, tagline, live url)

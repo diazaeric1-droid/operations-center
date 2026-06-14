@@ -45,16 +45,25 @@ def render() -> None:
         return
     pareto = A.pareto_by_cause(daily)
 
+    n_causes = 0 if is_real else int((pareto["reason_key"] != "unclassified").sum())
+    uncaptured_pct = (0.0 if is_real or not len(pareto)
+                      else float(pareto.loc[pareto["reason_key"] == "unclassified",
+                                            "pct_of_total"].sum()))
     pt.kpi_row([
         {"label": "Deferred $", "value": f"${k['deferred_usd']:,.0f}",
          "delta": f"{k['pct_deferred']:.1f}% of potential", "delta_color": "inverse"},
         {"label": "Reason-Code Capture",
          "value": "N/A" if is_real else f"{k['capture_rate_pct']:.0f}%",
+         "delta": None if is_real else f"{uncaptured_pct:.0f}% uncaptured",
+         "delta_color": "off",
          "help": ("Public monthly filings carry no reason codes." if is_real else
-                  "Share of deferred barrels carrying a classified cause — "
-                  "uncaptured deferment is a data-quality gap to close.")},
-        {"label": "Causes in Play",
-         "value": "N/A" if is_real else f"{len(pareto)}"},
+                  "Share of deferred BARRELS carrying a classified cause (a coverage "
+                  "metric — distinct from the classifier's ~92% ACCURACY on the wells "
+                  "it did code). Uncaptured deferment is a data-quality gap.")},
+        {"label": "Root Causes in Play",
+         "value": "N/A" if is_real else f"{n_causes}",
+         "help": "Distinct operational causes (uncaptured/unclassified is a coding "
+                 "gap, not a cause, so it is not counted here)."},
     ])
 
     pt.section("Where the Barrels Go — $ by Cause")
@@ -62,19 +71,24 @@ def render() -> None:
         st.info("**Cause attribution N/A** — public monthly filings carry no reason "
                 "codes or operator cause notes. The deferment **quantity** is real "
                 "(from days-produced); the per-cause $-Pareto needs an operator's "
-                "coded event log. Switch the source above to **Synthetic "
-                "(reason-coded demo)** to see the full attribution.")
+                "coded event log. Switch the source to **Synthetic (reason-coded)** "
+                "for the full attribution.")
     elif len(pareto):
         pf = go.Figure()
         pf.add_bar(x=pareto["label"], y=pareto["deferred_usd"], name="Deferred $",
                    marker_color=[theme.BLUE if r else theme.GREY
-                                 for r in pareto["recoverable"]])
+                                 for r in pareto["recoverable"]],
+                   text=[f"${v:,.0f}" for v in pareto["deferred_usd"]],
+                   textposition="outside")
         pf.add_scatter(x=pareto["label"], y=pareto["cum_pct"], name="Cumulative %",
                        yaxis="y2", line=dict(color=theme.RED))
-        pf.update_layout(yaxis2=dict(overlaying="y", side="right", range=[0, 100],
-                                     title="cum %"))
-        st.plotly_chart(theme.style_fig(pf, height=380), width="stretch")
-        st.caption("Blue = recoverable · grey = planned/reservoir (not recoverable).")
+        pf.update_layout(yaxis_title="Deferred $",
+                         yaxis2=dict(overlaying="y", side="right", range=[0, 100],
+                                     title="cumulative %"))
+        st.plotly_chart(theme.style_fig(pf, height=400), width="stretch")
+        st.caption("Blue = recoverable by operator action · grey = not recoverable "
+                   "(planned, reservoir, or **uncaptured/unclassified** — the last is "
+                   "a coding gap to close, not a true root cause).")
         theme.source_note(
             "Deferred $ = deferred bbl × deck oil price, ranked Pareto by cause "
             "(vital-few first); cumulative % overlaid. Cause from the deterministic "
@@ -91,6 +105,11 @@ def render() -> None:
                     "public monthly data.")
         else:
             m = A.mttr_by_cause(evc)
+            # MTTR (mean time to RESTORE) is only meaningful for recoverable
+            # downtime — reservoir/depletion and planned work aren't "restored", so
+            # excluding them keeps the table from implying you can 5-day-fix decline.
+            if len(m):
+                m = m[m["reason_key"].map(core.deferment_reasons.is_recoverable)]
             if len(m):
                 mm = m.copy()
                 mm["mttr_days"] = mm["mttr_days"].map(lambda v: f"{v:.1f}")
@@ -100,8 +119,10 @@ def render() -> None:
                                      "mttr_days": "MTTR (d)",
                                      "total_event_days": "Down-Days"}),
                     width="stretch", hide_index=True)
+                st.caption("Recoverable causes only — reservoir/depletion and planned "
+                           "work are excluded (no operator 'restore' time applies).")
             else:
-                st.caption("No classified events in the period.")
+                st.caption("No classified recoverable events in the period.")
     with col_r:
         pt.section("Classified Events",
                    "The operator notes the classifier read, with its call.")
@@ -134,14 +155,16 @@ def _eval_section(is_real: bool) -> None:
     except Exception:  # noqa: BLE001 — eval snapshot absent: never invent numbers
         st.caption("No committed eval summary found in the vendored component.")
         return
+    rows = [{"Cause": cause, "Precision": m["precision"], "Recall": m["recall"],
+             "F1": m["f1"], "n": m["support"]}
+            for cause, m in res["per_class"].items()
+            # drop the phantom unclassified / zero-support rows (no ground truth to score)
+            if cause != "unclassified" and (m.get("support") or 0) > 0]
+    pc = pd.DataFrame(rows)
     e1, e2 = st.columns(2)
     e1.metric("Overall Accuracy", f"{res['accuracy'] * 100:.0f}%",
               f"{res['n']} events", delta_color="off")
-    e2.metric("Classes", len(res["per_class"]))
-    rows = [{"Cause": cause, "Precision": m["precision"], "Recall": m["recall"],
-             "F1": m["f1"], "n": m["support"]}
-            for cause, m in res["per_class"].items()]
-    pc = pd.DataFrame(rows)
+    e2.metric("Scored Classes", len(rows))
     for col in ("Precision", "Recall", "F1"):
         pc[col] = pc[col].map(lambda v: f"{v:.2f}" if isinstance(v, (int, float))
                               else "—")

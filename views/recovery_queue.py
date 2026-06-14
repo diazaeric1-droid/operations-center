@@ -68,6 +68,12 @@ def render() -> None:
          "help": "Highest value-per-day-to-restore item — do this first."},
     ])
 
+    st.caption("Recoverable $ is **gross** deferred revenue (lost barrels × deck "
+               "price) over the period — the base-management recovery target, not a "
+               "net-of-cost NPV. Per-well intervention cost, NRI, and PV10 economics "
+               "are applied on the **Action Chain** page when an item is authorized. "
+               "Priority = recoverable $ ÷ MTTR ranks value per day-to-restore.")
+
     pt.section("Top Recovery Opportunities by $",
                "A quick high-value win outranks a slow one of similar size.")
     bar = queue.head(12).iloc[::-1]

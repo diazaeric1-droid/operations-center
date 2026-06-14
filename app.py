@@ -47,17 +47,38 @@ except Exception as e:  # noqa: BLE001
     st.stop()
 
 
-# --- first-run bootstrap: synthetic data + trained ESP model (cached) ----------
-@st.cache_resource(show_spinner=False)
-def _bootstrap() -> bool:
-    with st.status("First-time setup — generating fleets + training the ESP "
-                   "risk model (~30s, one time)…", expanded=True) as status:
-        core.bootstrap(log=status.write)
-        status.update(label="Setup complete.", state="complete", expanded=False)
-    return True
+# --- first-run bootstrap: synthetic data + trained ESP model -------------------
+# The data + ESP model are .gitignore'd, so a cold container regenerates them
+# (~30s, one time). Show a COMPACT, collapsible status bar only when there is real
+# first-run work to do; on a warm container the artifacts already exist and this is
+# silent. Live log streams into the drill-down, and the bar always reaches a
+# terminal complete/error state — so the spinner can never sit forever.
+def _artifacts_ready() -> bool:
+    try:
+        return (core.ESP_MODEL.exists()
+                and any(core.DIGEST_FLEET.glob("well_*.csv"))
+                and any(core.DEFERMENT_WELLS.glob("well_*.csv")))
+    except Exception:  # noqa: BLE001
+        return False
 
 
-_bootstrap()
+if not _artifacts_ready():
+    with st.status("First-time setup — generating the synthetic fleet and training "
+                   "the ESP risk model (~30s, one time). Expand for the log.",
+                   expanded=False) as _status:
+        try:
+            core.bootstrap(log=_status.write)
+            _status.update(
+                label="Setup complete — fleet generated, ESP model trained.",
+                state="complete")
+        except Exception as _e:  # noqa: BLE001
+            _status.update(label="First-time setup failed — see details.",
+                           state="error")
+            st.error(
+                "Couldn't complete first-time setup (synthetic data generation / "
+                f"ESP model training).\n\n```\n{type(_e).__name__}: {_e}\n```\n\n"
+                "Reload to retry; if it persists, check the app logs.")
+            st.stop()
 
 # --- global session-state contract (seed BEFORE widgets + navigation) ----------
 for _k, _v in c.STATE_DEFAULTS.items():
@@ -68,16 +89,18 @@ if st.session_state["well_id"] not in _well_ids:
     st.session_state["well_id"] = _well_ids[0] if _well_ids else None
 
 # --- global sidebar -------------------------------------------------------------
+# Lead with the Operator Products switcher (the portfolio's three products), then
+# the controls that drive this console. Data provenance lives on Sources & BYOD.
+pt.product_switcher("ops")
 with st.sidebar:
-    st.caption("**Console data** — Today + Well File: synthetic daily SCADA "
-               f"({len(_well_ids)} wells, regenerated at bootstrap). "
-               "Loss Accounting: real Colorado ECMC monthly records by default. "
-               "Two datasets, two cadences — never joined. Details: Sources & BYOD.")
+    st.subheader("Well file")
     if _well_ids:
         st.selectbox("Selected well (Well File pages)", _well_ids, key="well_id",
                      help="Drives Well 360 and Action Chain. Pick from the "
                           "surveillance fleet; the digest, ESP agent, and AFE "
                           "chain all key on this id.")
+        st.caption(f"Synthetic Permian demo fleet · {len(_well_ids)} wells · "
+                   "full provenance on **Sources & BYOD**.")
     st.subheader("Price deck")
     st.slider("Oil price ($/bbl)", min_value=20.0, max_value=150.0, step=1.0,
               key="oil_price",
@@ -87,16 +110,12 @@ with st.sidebar:
               step=0.01, key="nri",
               help="Share of revenue after royalty; nets the revenue side of "
                    "triage + AFE economics.")
-    st.slider("Discount rate", min_value=0.0, max_value=0.30, step=0.01,
-              key="discount",
-              help="Deck context. Chain economics use the AFE component's "
-                   "certified PV10 kernel; a non-10% deck discount is flagged on "
-                   "NPV pages rather than silently re-rating component math.")
+    st.caption("Discounting is fixed at **PV10** (10%) — the AFE component's "
+               "certified economics kernel; every NPV on the console uses it.")
     st.text_input("Anthropic API key (optional)", type="password",
                   key="anthropic_key",
                   help="Session-only, never stored. Powers narrated briefs; every "
                        "number works without it.")
-    pt.product_switcher("ops")
 
 # --- navigation ------------------------------------------------------------------
 _nav: dict[str, list] = {}

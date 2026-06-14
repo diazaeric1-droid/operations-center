@@ -74,16 +74,19 @@ def render() -> None:
          "help": "Sum of cumulative deferred $ across open events over their life."},
     ])
 
-    pt.section("Open Events")
+    pt.section("Open Events",
+               "Ranked by duration — the longest-running outages first (an event "
+               "that has stayed down for days is the one a foreman chases).")
     if open_evts:
         rows = []
-        for e in sorted(open_evts, key=lambda e: (-e.deferred_usd, e.well_id)):
+        # Longest-running first; ties broken by cumulative deferred $.
+        for e in sorted(open_evts, key=lambda e: (-e.duration_days, -e.deferred_usd)):
             rows.append({
+                "Duration (days)": e.duration_days,
                 "Well": e.well_id,
                 "Event Type": e.event_type,
                 "State": e.state,
                 "Start Date": e.start_date,
-                "Duration (days)": e.duration_days,
                 "Cumulative Deferred bbl": round(e.deferred_bopd, 0),
                 "Cumulative Deferred $": round(e.deferred_usd, 0),
                 "Today's Deferral $": round(e.last_deferred_usd, 0),
