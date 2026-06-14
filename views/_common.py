@@ -24,7 +24,7 @@ STATE_DEFAULTS: dict = {
     "nri": 0.80,
     "discount": 0.10,
     "well_id": None,          # resolved to the first fleet well on first use
-    "data_source": core.DEF_SRC_REAL_CO,   # Loss Accounting source (real CO default)
+    "data_source": core.DEF_SRC_SYNTHETIC,  # Loss Accounting source (synthetic default)
     "anthropic_key": "",
     # session-only uploads (Data page writes these; nothing touches disk)
     "scada_upload": None,         # bytes | None — fleet SCADA CSV (digest schema)
@@ -135,6 +135,35 @@ def board(price: float, nri: float) -> pd.DataFrame:
     return core.rank_fleet(price_per_bbl=price, net_revenue_interest=nri)
 
 
+@st.cache_data(show_spinner=False)
+def deferred_by_well(token: str, price: float) -> dict:
+    """Per-well deferred bopd from the digest's rate-loss scan — the REAL money
+    signal. The Triage Board ranks on the ESP alert feed, which carries no deferred
+    barrels by design (an ESP failure signature ≠ a quantified rate loss), so the
+    board's own deferred column is zero; this joins the digest's decline-aware
+    rate-loss detector back in for an honest deferred-$ column."""
+    out: dict[str, float] = {}
+    for a in scan(token, price):
+        if getattr(a, "acknowledged", False):
+            continue
+        d = float(getattr(a, "deferred_bopd", 0.0) or 0.0)
+        if d > 0:
+            out[str(a.well_id)] = max(out.get(str(a.well_id), 0.0), d)
+    return out
+
+
+def board_with_deferred(price: float, nri: float, token: str | None = None
+                        ) -> pd.DataFrame:
+    """The certified ranked board with a DISPLAY ``deferred_bopd`` / ``deferred_usd_
+    per_day`` sourced from the digest rate-loss scan (real values), leaving the
+    certified ranking columns (risk, intervention, risked NPV) untouched."""
+    b = board(price, nri).copy()
+    dbw = deferred_by_well(token or DISK_TOKEN, price)
+    b["deferred_bopd"] = b["well_id"].map(lambda w: dbw.get(str(w), 0.0)).round(1)
+    b["deferred_usd_per_day"] = (b["deferred_bopd"] * price * nri).round(0)
+    return b
+
+
 def split_board(b: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(action wells, no-action tier) — same split pe-pipeline's board uses."""
     mask = b["recommended_intervention"] == "no_action"
@@ -153,24 +182,52 @@ _BYOD_DEF: dict[str, bytes] = {}
 
 
 def loss_source_control() -> str:
-    """Render the Loss Accounting source selector (radio) and return the active
-    source key. Real Colorado ECMC is the default; the upload option appears only
-    once the Data page has a validated monthly CSV in session."""
+    """Render the Loss Accounting source selector and return the active source key.
+
+    The built-in source is the synthetic reason-coded fleet (full cause attribution
+    + a ground-truth classifier eval); a validated monthly CSV from the Data page
+    adds a "Your upload" option. The real Colorado ECMC monthly extract is retained
+    only as a bring-your-own reference dataset (Sources & BYOD), not a default —
+    public monthly filings carry no reason codes, so they can't drive cause
+    attribution, MTTR, or the recovery queue."""
     ss = st.session_state
-    options = [core.DEF_SRC_REAL_CO, core.DEF_SRC_SYNTHETIC]
+    options = [core.DEF_SRC_SYNTHETIC]
     if ss.get("deferment_upload"):
         options.append(core.DEF_SRC_UPLOAD)
     if ss.get("data_source") not in options:
-        ss["data_source"] = core.DEF_SRC_REAL_CO
+        ss["data_source"] = core.DEF_SRC_SYNTHETIC
+    if len(options) == 1:
+        # Only the synthetic source is available — no radio needed; state is set.
+        return ss["data_source"]
     st.radio(
         "Loss-accounting source", options, key="data_source", horizontal=True,
         format_func=lambda k: LOSS_SOURCE_LABELS.get(k, k),
-        help="Real — Colorado: FREE ECMC public monthly records (DJ Basin "
-             "Niobrara/Codell horizontals, Weld County); the deferment QUANTITY is "
-             "real, the cause is N/A (no public reason codes). Synthetic: modeled "
-             "fleet with reason-coded events + ground truth (powers cause attribution "
-             "and the classifier eval). Uploads come from the Data page.")
+        help="Synthetic: modeled fleet with reason-coded events + ground truth "
+             "(powers cause attribution, MTTR, the recovery queue, and the "
+             "classifier eval). Your upload: a tidy monthly production CSV from the "
+             "Data page (real quantity, cause N/A — public monthly data has no "
+             "reason codes).")
     return ss["data_source"]
+
+
+@st.cache_data(show_spinner=False)
+def intervention_cost(intervention: str) -> float:
+    """All-in cost of an intervention from the AFE component's cost database
+    (NaN if the intervention isn't priced — rendered as '—')."""
+    try:
+        return float(core.afe_cost_db.cost_rollup(intervention)["total"])
+    except Exception:  # noqa: BLE001
+        return float("nan")
+
+
+def split_opportunities(action: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame"]:
+    """Split the action tier into value-accretive opportunities vs an at-risk watch
+    list. An "opportunity" is a well whose recommended intervention has a POSITIVE
+    risk-weighted NPV (worth doing now); a well with a non-positive risked NPV is on
+    watch — the failure signature is there but intervening now destroys value, so
+    the action is to monitor and re-rank as risk climbs, not to spend capital."""
+    pos = action["est_risked_npv"] > 0
+    return action[pos].reset_index(drop=True), action[~pos].reset_index(drop=True)
 
 
 def loss_badge(source: str) -> tuple[str, str]:
@@ -217,7 +274,7 @@ def loss_source_token(source: str) -> str:
             token = f"upload::{hashlib.sha1(data).hexdigest()}"
             _BYOD_DEF[token] = data
             return token
-        return core.DEF_SRC_REAL_CO  # bytes gone → honest fallback
+        return core.DEF_SRC_SYNTHETIC  # bytes gone → fall back to the built-in source
     return source
 
 

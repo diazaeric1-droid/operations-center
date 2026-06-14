@@ -179,6 +179,213 @@ def fleet_size() -> int:
         return 0
 
 
+# ---- fleet health + production divergence (streamlit-free) -------------------
+# Shared by the Home fleet-health glance, the Morning Brief metrics, and the
+# headless email script — one definition so every surface reports the same number.
+
+# A well is "down" if its latest daily oil rate is effectively zero relative to its
+# own recent baseline (a real shut-in, not a naturally low-rate well).
+DOWN_ABS_BOPD = 1.0          # below this absolute rate = down regardless of baseline
+DOWN_FRAC_OF_BASELINE = 0.10  # OR below 10% of a meaningful (>5 bopd) baseline
+_DOWN_BASELINE_MIN = 5.0      # baseline must exceed this to call a collapse "down"
+
+
+def _latest_and_baseline(df) -> tuple[float, float]:
+    """(latest bopd, 7-day pre-latest baseline bopd) for one well's SCADA frame."""
+    if df is None or "bopd" not in getattr(df, "columns", []) or not len(df):
+        return 0.0, 0.0
+    last = float(df["bopd"].iloc[-1])
+    base = float(df["bopd"].iloc[-8:-1].mean()) if len(df) >= 8 else last
+    return last, base
+
+
+def _is_down(last: float, base: float) -> bool:
+    return last < DOWN_ABS_BOPD or (base > _DOWN_BASELINE_MIN
+                                    and last < DOWN_FRAC_OF_BASELINE * base)
+
+
+def elevated_risk_wells(risk_by_well: dict | None,
+                        top_frac: float = 0.25) -> set[str]:
+    """The fleet's OWN highest-risk wells (top ``top_frac`` by 30-day ESP score).
+
+    The ESP model is trained on the ESP component's synthetic SCADA, so its score
+    on the surveillance fleet is a *relative* failure-signature ranking, not a
+    calibrated absolute probability — an absolute cutoff (e.g. ≥50%) would flag most
+    of the fleet. A fleet-relative top quantile is the honest, credible reading:
+    "the wells whose signature looks worst right now." A well must also sit above
+    the fleet median to be flagged, so a uniformly-healthy fleet flags nobody."""
+    if not risk_by_well:
+        return set()
+    vals = sorted(float(r) for r in risk_by_well.values() if r is not None)
+    if not vals:
+        return set()
+    k = max(1, int(round(len(vals) * top_frac)))
+    cutoff = vals[-k]
+    median = vals[len(vals) // 2]
+    cutoff = max(cutoff, median + 1e-9)
+    return {str(w) for w, r in risk_by_well.items()
+            if r is not None and float(r) >= cutoff}
+
+
+def fleet_health_summary(fleet: dict, anomalies: list,
+                         risk_by_well: dict | None = None,
+                         risk_top_frac: float = 0.25) -> dict:
+    """Quick-glance fleet status, classifying every well green/amber/red:
+
+    * **impaired** (red): producing a real loss right now — an active anomaly with
+      deferred $/day, or a well that is down (≈0 production).
+    * **watch** (amber): a non-$ active flag (e.g. comms/metering) or one of the
+      fleet's own highest-risk wells (top ``risk_top_frac`` by ESP score).
+    * **healthy** (green): everything else — flowing on/around baseline, low relative
+      risk.
+
+    Pure/deterministic. ESP risk is folded in *relatively* (see
+    ``elevated_risk_wells``) so the glance never claims most of the fleet is failing."""
+    total = len(fleet)
+    active = [a for a in anomalies if not getattr(a, "acknowledged", False)]
+    losing = {str(a.well_id) for a in active if getattr(a, "deferred_bopd", 0.0) > 0}
+    flagged = {str(a.well_id) for a in active}
+
+    down, fleet_bopd = set(), 0.0
+    for wid, df in fleet.items():
+        last, base = _latest_and_baseline(df)
+        fleet_bopd += max(last, 0.0)
+        if _is_down(last, base):
+            down.add(str(wid))
+
+    at_risk = elevated_risk_wells(risk_by_well, top_frac=risk_top_frac)
+
+    impaired = losing | down
+    watch = (flagged | at_risk) - impaired
+    healthy = max(total - len(impaired) - len(watch), 0)
+    return {
+        "total": total,
+        "healthy": healthy,
+        "watch": len(watch),
+        "impaired": len(impaired),
+        "down": len(down),
+        "losing": len(losing),
+        "at_risk": len(at_risk),
+        "fleet_bopd": round(fleet_bopd, 0),
+        "pct_nominal": round(100.0 * healthy / total, 0) if total else 0.0,
+    }
+
+
+# Categories the digest raises for a well diverging from its own decline-expected
+# rate (production divergence) vs a data-quality flag (comms/metering).
+DIVERGENCE_CATEGORIES = ("rate_drop", "rate_drop_decline_aware")
+
+
+def production_divergence_summary(fleet: dict, anomalies: list) -> dict:
+    """Wells down + wells diverging from decline-expected production.
+
+    * ``down`` — wells at ≈0 production (full shut-in / outage).
+    * ``divergences`` — active rate-loss anomalies (off the well's own decline-
+      expected rate), money-first, with deferred bopd/$ already attached.
+
+    The metric a foreman wants at 6:30am: who is OFF, and who is BELEAGUERED."""
+    active = [a for a in anomalies if not getattr(a, "acknowledged", False)]
+    div = [a for a in active if getattr(a, "category", "") in DIVERGENCE_CATEGORIES]
+    div = sorted(div, key=lambda a: -getattr(a, "deferred_usd_per_day", 0.0))
+
+    down = []
+    for wid, df in fleet.items():
+        last, base = _latest_and_baseline(df)
+        if _is_down(last, base):
+            down.append({"well_id": str(wid), "last_bopd": round(last, 1),
+                         "baseline_bopd": round(base, 1)})
+    down.sort(key=lambda d: -d["baseline_bopd"])
+
+    return {
+        "n_down": len(down),
+        "down": down,
+        "n_divergences": len(div),
+        "divergence_bopd": round(sum(getattr(a, "deferred_bopd", 0.0) for a in div), 1),
+        "divergence_usd_day": round(
+            sum(getattr(a, "deferred_usd_per_day", 0.0) for a in div), 0),
+        "divergences": div,
+    }
+
+
+def _divergence_section_md(div: dict, price_per_bbl: float,
+                           net_revenue_interest: float = 0.80) -> str:
+    """Markdown block appended to the brief (and emailed) — wells down + divergences.
+
+    Deferred $ is NET-to-operator (× NRI) to match the Morning Brief page KPIs and
+    the Triage Board convention (so the inbox and the page never disagree)."""
+    nri = net_revenue_interest
+
+    def _net(bopd: float) -> float:
+        return float(bopd or 0.0) * price_per_bbl * nri
+
+    L = ["## Production Divergences & Wells Down", ""]
+    L.append(f"- **Wells down (≈0 production):** {div['n_down']}")
+    L.append(f"- **Production divergences (off decline-expected rate):** "
+             f"{div['n_divergences']} — {div['divergence_bopd']:,.0f} bopd / "
+             f"${_net(div['divergence_bopd']):,.0f}/day deferred (net to operator at "
+             f"${price_per_bbl:,.0f}/bbl × NRI {nri:.2f})")
+    L.append("")
+    if div["down"]:
+        L.append("**Wells down**")
+        L.append("")
+        L.append("| Well | Latest bopd | Baseline bopd |")
+        L.append("|---|---|---|")
+        for d in div["down"][:15]:
+            L.append(f"| {d['well_id']} | {d['last_bopd']:,.1f} | "
+                     f"{d['baseline_bopd']:,.1f} |")
+        L.append("")
+    if div["divergences"]:
+        L.append("**Top production divergences**")
+        L.append("")
+        L.append("| Well | Category | Deferred bopd | Deferred $/day (net) |")
+        L.append("|---|---|---|---|")
+        for a in div["divergences"][:15]:
+            L.append(f"| {a.well_id} | {a.category} | "
+                     f"{getattr(a, 'deferred_bopd', 0.0):,.1f} | "
+                     f"${_net(getattr(a, 'deferred_bopd', 0.0)):,.0f} |")
+        L.append("")
+    if not div["down"] and not div["divergences"]:
+        L.append("_No wells down and no production divergences on the latest scan._")
+    return "\n".join(L)
+
+
+def fleet_as_of(fleet: dict) -> str:
+    """Latest production date across a SCADA fleet (ISO), or today if empty —
+    streamlit-free so the headless brief and the page date identically."""
+    import datetime as _dt
+
+    import pandas as pd
+    dates = [df["date"].max() for df in fleet.values()
+             if df is not None and len(df)]
+    return (pd.Timestamp(max(dates)).date().isoformat() if dates
+            else _dt.date.today().isoformat())
+
+
+def scada_as_of() -> str:
+    """As-of day of the bootstrapped SCADA fleet (for the email subject line)."""
+    return fleet_as_of(load_scada_fleet())
+
+
+def morning_brief_markdown(price_per_bbl: float = 70.0, inject_demo: bool = False,
+                           net_revenue_interest: float = 0.80) -> str:
+    """The full morning brief as markdown (deterministic, streamlit-free).
+
+    The vendored digest brief (anomalies + ongoing events) plus the Production
+    Divergences & Wells Down section — the SAME composition the Morning Brief page
+    renders and the daily email script sends, so the page and the inbox match:
+    dated to the data's as-of day and net-of-NRI throughout."""
+    fleet = load_scada_fleet()
+    anomalies = scan_anomalies(fleet, price_per_bbl=price_per_bbl)
+    summary = digest_loader.fleet_summary(fleet)
+    events = replay_events(fleet, price_per_bbl=price_per_bbl, inject_demo=inject_demo)
+    as_of = fleet_as_of(fleet)
+    base = digest_brief.render_brief_markdown(summary, anomalies, brief_date=as_of,
+                                              events=events)
+    div = production_divergence_summary(fleet, anomalies)
+    return base + "\n\n" + _divergence_section_md(div, price_per_bbl,
+                                                  net_revenue_interest)
+
+
 def alert_for(well_id: str, price_per_bbl: float = 70.0,
               alerts: list[dict] | None = None) -> dict:
     """A WellAlert-shaped dict for ANY fleet well — the real alert if the digest

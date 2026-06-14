@@ -5,8 +5,9 @@ The console runs on TWO datasets at different cadences. They are not joined:
 * Surveillance fleet (Today + Well File) — synthetic DAILY SCADA, 50 wells,
   known ground truth. Public production data is monthly, so daily SCADA must be
   modeled; the digest's detectors are backtested against seeded faults + decoys.
-* Loss-accounting book (Loss Accounting) — REAL Colorado ECMC monthly records by
-  default (DJ Basin); deferment quantity is real, cause attribution honestly N/A.
+* Loss-accounting book (Loss Accounting) — SYNTHETIC reason-coded monthly fleet by
+  default (40 wells, ground-truth causes), so cause attribution / MTTR / recovery
+  queue all run. Bring your own monthly book (or a real public extract) below.
 
 Uploads are session-only: parsed in memory, never written to disk or logged.
 """
@@ -43,13 +44,15 @@ def render() -> None:
         "|---|---|---|---|\n"
         "| Today + Well File | Surveillance fleet (SCADA) | Daily | **Synthetic** "
         "modeled Permian fleet, 50 wells, known ground truth |\n"
-        "| Loss Accounting | Production book | Monthly | **Real** Colorado ECMC "
-        "(COGCC) public records by default; synthetic reason-coded fleet optional |\n")
+        "| Loss Accounting | Production book | Monthly | **Synthetic** reason-coded "
+        "fleet, 40 wells, ground-truth causes — bring your own monthly book below |\n")
     st.caption(
-        "They are different datasets at different cadences — daily SCADA with ESP "
-        "diagnostics does not exist in public data, and the real monthly book has "
-        "no per-day signal. This console keeps them side by side and does **not** "
-        "fabricate a join; each area's pages say which book they read.")
+        "Both lenses run on modeled fleets with known ground truth — the honest demo "
+        "posture: daily SCADA with ESP diagnostics and a reason-coded downtime log "
+        "don't exist together in any public dataset. They are different datasets at "
+        "different cadences; this console keeps them side by side and does **not** "
+        "fabricate a join. Bring your own daily SCADA or monthly production book "
+        "below to run the same engines on your wells.")
 
     st.divider()
 
@@ -98,9 +101,11 @@ def render() -> None:
         "**Tidy monthly schema** (one row per well per month): "
         f"`{'`, `'.join(core.deferment_ndic.NDIC_COLUMNS)}`. "
         "`date` is YYYY-MM; rate = oil_bbl ÷ days-produced; downtime = days in "
-        "month − days produced. Like all public monthly data it carries no reason "
-        "codes, so cause attribution will read N/A — the deferment quantity is "
-        "yours and real. **Nothing is stored server-side.**")
+        "month − days produced. A public monthly book carries no reason codes, so "
+        "cause attribution, MTTR, and the recovery queue read N/A — the deferment "
+        "**quantity** is yours and real. (The synthetic source keeps those views "
+        "live because it ships ground-truth causes.) **Nothing is stored "
+        "server-side.**")
     st.download_button("Download monthly template CSV",
                        data=core.monthly_template_csv(),
                        file_name="monthly_production_template.csv", mime="text/csv")
@@ -115,23 +120,29 @@ def render() -> None:
             st.session_state["deferment_upload"] = None
             st.session_state["deferment_upload_name"] = ""
             if st.session_state.get("data_source") == core.DEF_SRC_UPLOAD:
-                st.session_state["data_source"] = core.DEF_SRC_REAL_CO
+                st.session_state["data_source"] = core.DEF_SRC_SYNTHETIC
             st.rerun()
 
     st.divider()
     pt.section("Provenance Notes")
     st.markdown(
-        "- **Synthetic SCADA fleet** — regenerated deterministically on first run "
-        "(seeded per well); 6 seeded anomalies + 4 near-threshold decoys give the "
-        "detectors an honest backtest (committed snapshot: event precision 0.80, "
-        "recall 1.00).\n"
-        "- **Real Colorado ECMC** — public COGCC monthly records, DJ Basin "
-        "Niobrara/Codell horizontals (Weld County), committed in the vendored "
-        "deferment component. Real downtime from days-produced; no reason codes "
-        "exist publicly, and the console says so instead of inventing causes.\n"
+        "- **Synthetic SCADA fleet** (Today + Well File) — regenerated "
+        "deterministically on first run (seeded per well); 6 seeded anomalies + 4 "
+        "near-threshold decoys give the detectors an honest backtest (committed "
+        "snapshot: event precision 0.80, recall 1.00).\n"
+        "- **Synthetic reason-coded fleet** (Loss Accounting) — modeled monthly book "
+        "with a ground-truth cause on every event, so the $-Pareto, MTTR, recovery "
+        "queue, and the classifier eval all run; the classifier is scored against "
+        "those held-out labels (CI gate fails under 80%).\n"
         "- **ESP risk model** — XGBoost + calibration, trained at bootstrap on the "
         "ESP component's synthetic SCADA (100 wells, 5 failure modes); the model "
-        "artifact is regenerated, never committed.\n"
+        "artifact is regenerated, never committed. On the surveillance fleet its "
+        "30-day score is used as a *relative* failure-signature ranking, not a "
+        "calibrated absolute probability.\n"
+        "- **Bring your own data** — drop a daily SCADA CSV or a monthly production "
+        "book above; both are parsed in memory for the session only. A real public "
+        "monthly extract (e.g. Colorado ECMC / your operator export) works as the "
+        "monthly upload — the deferment quantity is real, cause attribution N/A.\n"
         "- **Anthropic key (sidebar)** — optional, session-only, never stored; "
         "powers narration only. Every number on every page is deterministic.")
     theme.references(["arps", "deferment"])
