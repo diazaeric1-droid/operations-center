@@ -29,8 +29,7 @@ _LIFT_CHANNELS = {
             ("current_imbalance_pct", "Current imbalance (%)", theme.RED)],
     "Rod pump": [("runtime_pct", "Runtime (%)", theme.GREEN),
                  ("motor_amps", "Motor load (A)", theme.AMBER)],
-    "Flowing": [("tubing_pressure_psi", "Tubing pressure (psi)", theme.BLUE),
-                ("gas_mcfd", "Gas (MCF/d)", theme.AMBER)],
+    "Flowing": [("intake_pressure_psi", "Downhole pressure (psi)", theme.PURPLE)],
 }
 
 _RANGES = {"90 days": 90, "180 days": 180, "1 year": 365, "Lifetime": 10_000}
@@ -236,7 +235,7 @@ def _well_charts(df, meta, win: int) -> None:
                    "the failure-signature channels the ESP risk model scores.",
             "Rod pump": "Rod-pump wells: runtime and motor load proxy pump fillage / "
                         "pound-off.",
-            "Flowing": "Flowing wells: tubing pressure and gas trend the natural "
-                       "drive."}.get(meta.lift, "")
+            "Flowing": "Flowing wells: no downhole pump — the oil/water/gas streams "
+                       "and downhole pressure carry the review."}.get(meta.lift, "")
     if note:
         theme.source_note(note)

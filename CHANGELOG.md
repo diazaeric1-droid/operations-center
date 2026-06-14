@@ -32,6 +32,15 @@ Realistic 100-well fleet + a new Surveillance page + Home/triage rework.
   into a Methods expander.
 - **Navigation** — Morning Brief now sits above the Triage Board; Surveillance
   leads the Today section after Home.
+- **Well 360 revamp** — a conversation-starting one-pager: a status verdict
+  (opportunity / watch / stable), **online-since** + a synthetic **work history**
+  (how many times the well has been worked, what was done, lifetime spend), and
+  lift-aware production + diagnostic trends (oil/water/gas plus the channels that
+  matter for the lift type) with today's alert marked.
+- **Action Chain revamp** — drill into **any** well (or jump to one of the wells
+  flagged today, so the Detect stage is never an empty "none"); a richer Detect
+  stage; and an automated AFE summary card (intervention, cost, risked NPV, and
+  authority-limit approval routing) with a one-click decision-ready AFE download.
 
 ## [0.2.0] — 2026-06-13
 

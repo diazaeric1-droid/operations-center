@@ -136,6 +136,59 @@ def hero_wells() -> list[WellMeta]:
     return [_HERO[k] for k in sorted(_HERO)]
 
 
+# --- synthetic intervention / workover history (deterministic, additive) -------
+_WORKOVER_TYPES = [
+    ("ESP swap", 523_000), ("Acid stimulation", 274_000),
+    ("Gas-lift optimization", 27_000), ("Rod-pump workover", 84_000),
+    ("Scale treatment", 274_000), ("Tubing repair", 96_000),
+    ("Recompletion", 410_000),
+]
+
+
+def well_history(well_id: str, as_of: str = "2026-05-29") -> dict:
+    """Deterministic synthetic well-work history for a well: when it came online and
+    every past intervention (date, type, cost, uplift). Seeded off the well number so
+    it never changes between runs. Additive — derives nothing from production data."""
+    import random as _random
+    from datetime import date
+
+    meta = get(well_id)
+    n = _suffix(well_id)
+    rng = _random.Random(n * 131 + 7)
+    fp = meta.first_prod  # "YYYY-MM"
+    try:
+        fy, fm = (int(x) for x in fp.split("-"))
+    except Exception:  # noqa: BLE001
+        fy, fm = 2022, 1
+    ay, am = (int(x) for x in as_of.split("-")[:2])
+    months_online = max(1, (ay - fy) * 12 + (am - fm))
+
+    # Hero wells carry a richer history; everyone gets 0–3 prior jobs.
+    n_jobs = (2 if meta.hero else 0) + rng.randint(0, 2)
+    n_jobs = min(n_jobs, max(0, months_online // 6))
+    records = []
+    for _i in range(n_jobs):
+        mo = rng.randint(2, max(3, months_online - 1))
+        yy = fy + (fm - 1 + mo) // 12
+        mm = (fm - 1 + mo) % 12 + 1
+        kind, base = rng.choice(_WORKOVER_TYPES)
+        cost = int(base * rng.uniform(0.85, 1.2))
+        uplift = rng.randint(15, 120)
+        records.append({"date": date(yy, mm, 1).isoformat(), "type": kind,
+                        "cost_usd": cost, "uplift_bopd": uplift,
+                        "result": "restored to type curve" if rng.random() > 0.3
+                        else f"+{uplift} bopd uplift"})
+    records.sort(key=lambda r: r["date"])
+    return {
+        "online_since": fp,
+        "months_online": months_online,
+        "years_online": round(months_online / 12.0, 1),
+        "n_workovers": len(records),
+        "records": records,
+        "last_worked": records[-1]["date"] if records else None,
+    }
+
+
 def as_frame(well_ids):
     """Return a pandas DataFrame of metadata for the given well_ids (pandas lazy-imported)."""
     import pandas as pd
