@@ -230,6 +230,28 @@ def split_opportunities(action: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.Dat
     return action[pos].reset_index(drop=True), action[~pos].reset_index(drop=True)
 
 
+def triage_tiers(board: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame",
+                                                 "pd.DataFrame"]:
+    """Three operating tiers off the enriched board (needs the real deferred column
+    from ``board_with_deferred``):
+
+    * **opportunities** — value-accretive now (positive risk-weighted NPV).
+    * **watch** — non-positive NPV BUT actively deferring production: the well is
+      losing barrels, yet at today's failure risk an intervention wouldn't pay, so
+      the action is to monitor and re-rank, not to spend capital.
+    * **stable** — non-positive NPV and no deferment: nothing to do (the bulk of a
+      healthy fleet). The ESP score on these is a low *relative* signal, not an
+      absolute failure probability.
+    """
+    action, no_action = split_board(board)
+    opportunities = action[action["est_risked_npv"] > 0].reset_index(drop=True)
+    rest = action[action["est_risked_npv"] <= 0]
+    losing = rest["deferred_bopd"] > 0
+    watch = rest[losing].reset_index(drop=True)
+    stable = pd.concat([rest[~losing], no_action]).reset_index(drop=True)
+    return opportunities, watch, stable
+
+
 def loss_badge(source: str) -> tuple[str, str]:
     """(kind, detail) for theme.data_badge on the active Loss Accounting source."""
     if source == core.DEF_SRC_SYNTHETIC:

@@ -26,6 +26,7 @@ from views import (  # noqa: E402
     morning_brief,
     ongoing_events,
     recovery_queue,
+    surveillance,
     triage_board,
     well_360,
 )
@@ -34,10 +35,12 @@ from views import (  # noqa: E402
 PAGES: dict[str, list[tuple[str, str, str, object, bool]]] = {
     "Today": [
         ("Home", ":material/home:", "home", home.render, True),
-        ("Triage Board", ":material/monitoring:", "triage-board",
-         triage_board.render, False),
+        ("Surveillance", ":material/insights:", "surveillance",
+         surveillance.render, False),
         ("Morning Brief", ":material/article:", "morning-brief",
          morning_brief.render, False),
+        ("Triage Board", ":material/monitoring:", "triage-board",
+         triage_board.render, False),
         ("Ongoing Events", ":material/event_repeat:", "ongoing-events",
          ongoing_events.render, False),
     ],

@@ -56,7 +56,7 @@ def test_entry_points_importable_via_core():
 # ---- bootstrap artifacts -----------------------------------------------------
 
 def test_bootstrap_produces_expected_files(bootstrapped):
-    assert len(list(core.DIGEST_FLEET.glob("well_*.csv"))) == 50
+    assert len(list(core.DIGEST_FLEET.glob("well_*.csv"))) == 100
     assert core.ESP_MODEL.exists()
     assert len(list(core.DEFERMENT_WELLS.glob("well_*.csv"))) == 40
     assert core.DEFERMENT_EVENTS.exists()
@@ -134,9 +134,9 @@ def test_get_alerts_matches_digest_handoff_directly(bootstrapped):
     assert len(mine) == len(direct)
     assert mine[0]["well_id"] == direct[0]["well_id"]
     assert mine[0]["deferred_bopd"] == direct[0]["deferred_bopd"]
-    # Known component values on the seeded fleet (generator is deterministic).
-    assert len(mine) == 4
-    assert mine[0]["well_id"] == "well_013"
+    # Known component values on the seeded 100-well fleet (generator is deterministic).
+    assert len(mine) == 8
+    assert mine[0]["well_id"] == "well_014"
     assert mine[0]["deferred_bopd"] == 0.0
 
 
