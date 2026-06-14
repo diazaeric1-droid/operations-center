@@ -4,6 +4,44 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-06-14
+
+Realistic 100-well fleet + a new Surveillance page + Home/triage rework.
+
+### Data
+- **Fleet doubled to 100 wells** with a realistic health distribution. The
+  generator now seeds signatures that persist over the ESP model's 30-day feature
+  window (not just a 5-day blip) and adds the two channels the model keys on
+  (`current_imbalance_pct`, `drive_freq_hz`) plus gas-lift channels
+  (`gas_inj_mcfd`, `casing_pressure_psi`, `tubing_pressure_psi`). Result: the
+  Triage Board shows **~22 genuine opportunities** (gas-lift / scale fixes that
+  clear their cost) instead of one, plus real wells-down and production
+  divergences. Pinned tests updated for the new fleet.
+
+### Added
+- **Surveillance page** (Spotfire-style) — fleet oil/water/gas rate-time with
+  30-day moving averages, an exponential decline / type-curve check (actual vs
+  expected, implied deferment), and a per-well drill-down whose diagnostics adapt
+  to the artificial-lift type (gas-lift injection + casing/tubing pressure for
+  gas-lift wells, intake/amps/imbalance for ESP, runtime/load for rod pump).
+- **Triage Board — three tiers**: value-accretive **Opportunities**, an **At-Risk
+  Watch List** (losing production but not yet economic to fix), and a visible
+  **No-Action / Stable** table (full-fleet coverage, not just exceptions).
+- **Home** — **What Broke Overnight** + **What To Do First** (prioritized actions,
+  not just cost); boxed quick-link cards into the loop; the two-datasets note moved
+  into a Methods expander.
+- **Navigation** — Morning Brief now sits above the Triage Board; Surveillance
+  leads the Today section after Home.
+- **Well 360 revamp** — a conversation-starting one-pager: a status verdict
+  (opportunity / watch / stable), **online-since** + a synthetic **work history**
+  (how many times the well has been worked, what was done, lifetime spend), and
+  lift-aware production + diagnostic trends (oil/water/gas plus the channels that
+  matter for the lift type) with today's alert marked.
+- **Action Chain revamp** — drill into **any** well (or jump to one of the wells
+  flagged today, so the Detect stage is never an empty "none"); a richer Detect
+  stage; and an automated AFE summary card (intervention, cost, risked NPV, and
+  authority-limit approval routing) with a one-click decision-ready AFE download.
+
 ## [0.2.0] — 2026-06-13
 
 PE-credibility pass (full senior-PE + UX audit, then fixes) — presentation-layer

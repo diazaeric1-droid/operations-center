@@ -36,23 +36,22 @@ def render() -> None:
         pt.empty_state("No wells in the fleet — nothing to triage.",
                        "Run bootstrap (first app start) to generate the fleet.")
         return
-    action, no_action = c.split_board(board)
-    opportunities, watch = c.split_opportunities(action)
+    opportunities, watch, stable = c.triage_tiers(board)
 
     pt.kpi_row([
         {"label": "Fleet Size", "value": f"{len(board)} wells"},
-        {"label": "Value-Accretive Now", "value": f"{len(opportunities)}",
+        {"label": "Opportunities", "value": f"{len(opportunities)}",
          "help": "Wells whose recommended intervention clears its own cost today "
-                 "(positive risk-weighted NPV). The rest are on the watch list — "
-                 "the failure signal is there, but intervening now would destroy value."},
-        {"label": "Total Deferred $/day",
-         "value": f"${float(board['deferred_usd_per_day'].sum()):,.0f}",
-         "help": "Σ deferred bopd × price × NRI across the fleet, from the digest's "
-                 "decline-aware rate-loss scan (net-to-operator)."},
+                 "(positive risk-weighted NPV) — value-accretive now."},
+        {"label": "At-Risk Watch", "value": f"{len(watch)}",
+         "delta_color": "off",
+         "help": "Wells actively deferring production where an intervention is not "
+                 "yet economic — monitor and re-rank, don't spend capital."},
         {"label": "Addressable Risked NPV",
          "value": f"${float(opportunities['est_risked_npv'].sum()):,.0f}",
          "help": "Σ of the positive risk-weighted net-to-operator NPV across the "
-                 "value-accretive interventions."},
+                 "value-accretive interventions. Total fleet deferment runs "
+                 f"${float(board['deferred_usd_per_day'].sum()):,.0f}/day (net)."},
     ])
 
     pt.section("Top Opportunities — Value-Accretive Interventions",
@@ -137,21 +136,27 @@ def render() -> None:
                    "'Indicated If It Fails' is the intervention that would be run if "
                    "the well deteriorates — it is NOT a recommendation to act today.")
 
-    pt.section("No-Action Tier",
-               "Below the thresholds: risked NPV < $10k AND 30-day risk < 15%, "
-               "or zero deferment with risk < 10%.")
-    if no_action.empty:
-        st.caption("No wells in the no-action tier on this run — every well clears "
-                   "the action thresholds.")
+    pt.section("No-Action Tier — Stable Wells",
+               f"{len(stable)} wells producing on trend with no deferment and no "
+               "value-accretive intervention — nothing to do today. Listed for "
+               "completeness (full fleet coverage, not just the exceptions).")
+    if stable.empty:
+        st.caption("No wells in the stable tier on this run.")
     else:
-        with st.expander(f"{len(no_action)} well(s) require no action"):
-            show = no_action[["well_id", "failure_risk_30d", "deferred_bopd",
-                              "deferred_usd_per_day"]].copy()
-            show["failure_risk_30d"] = show["failure_risk_30d"].map(lambda x: f"{x:.0%}")
-            show["deferred_usd_per_day"] = show["deferred_usd_per_day"].map(
-                lambda x: f"${x:,.0f}")
-            show.columns = ["Well", "30-Day Risk", "Deferred BOPD", "Deferred $/day"]
-            st.dataframe(show, width="stretch", hide_index=True)
+        sd = pd.DataFrame({
+            "Well": [f"★ {w}" if h else w
+                     for w, h in zip(stable["well_id"], stable["hero"])],
+            "Field": stable["basin"] + " · " + stable["formation"],
+            "Lift": stable["lift"],
+            "Lateral (ft)": stable["lateral_length_ft"].map(lambda x: f"{int(x):,}"),
+            "Deferred $/day": stable["deferred_usd_per_day"].map(lambda x: f"${x:,.0f}"),
+            "Status": "stable — no action",
+        })
+        st.dataframe(sd, width="stretch", hide_index=True, height=360)
+        st.caption("These clear the action thresholds: no deferment and no positive "
+                   "intervention NPV. Their ESP score is a low relative signal on "
+                   "this fleet, not an absolute failure probability, so it is not "
+                   "shown here to avoid implying a healthy well is about to fail.")
 
     raw = c.board_with_deferred(price, nri)  # display frame (real deferred joined in)
     st.download_button("Download triage board (CSV)", data=raw.to_csv(index=False),

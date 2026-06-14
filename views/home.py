@@ -57,32 +57,100 @@ def render() -> None:
 
     _fleet_health(fleet, anomalies, b)
 
-    pt.section("The Morning Loop",
-               "Surveillance → loss accounting → fleet triage → action chain.")
-    st.markdown(
-        "1. **Morning Brief** — the overnight scan: every anomaly the deterministic "
-        "detectors raised, ranked money-first, with the deterministic brief.\n"
-        "2. **Ongoing Events** — the event state machine: multi-day outages that stay "
-        "ONGOING with running duration and cumulative deferred bbl/$.\n"
-        "3. **Loss Accounting** — where the barrels are going on the period book: "
-        "deferment buckets by category, waterfall, $-Pareto by cause, recovery queue.\n"
-        "4. **Triage Board** — the whole fleet ranked by risked-NPV opportunity, so "
-        "the first work order goes to the biggest defensible number.\n"
-        "5. **Action Chain** — for the selected well, run detect → predict → "
-        "authorize and walk away with a decision-ready AFE.")
-    _page_links()
+    _what_broke_and_next(anomalies, fleet, opportunities, price, nri)
 
-    pt.section("Two Datasets, Stated Plainly")
-    st.markdown(
-        "**Today + Well File** run on a synthetic daily SCADA fleet (modeled Permian, "
-        "known ground truth — public production data is monthly, not daily). "
-        "**Loss Accounting** runs on a synthetic, reason-coded monthly book with "
-        "ground-truth causes (so cause attribution, MTTR, and the recovery queue all "
-        "work). They are different datasets at different cadences; this console does "
-        "not fake a join between them. Bring your own daily SCADA or monthly book on "
-        "the **Sources & BYOD** page.")
+    pt.section("The Morning Loop",
+               "Jump straight to the work — surveillance → brief → triage → "
+               "loss accounting → action chain.")
+    _loop_cards()
+
+    with st.expander("Methods — two datasets, stated plainly"):
+        st.markdown(
+            "**Today + Well File** run on a synthetic daily SCADA fleet (modeled "
+            "Permian, known ground truth — public production data is monthly, not "
+            "daily). **Loss Accounting** runs on a synthetic, reason-coded monthly "
+            "book with ground-truth causes (so cause attribution, MTTR, and the "
+            "recovery queue all work). They are different datasets at different "
+            "cadences; this console does not fake a join between them. Bring your own "
+            "daily SCADA or monthly book on the **Sources & BYOD** page.")
 
     theme.references(["arps", "deferment", "npv"])
+
+
+def _what_broke_and_next(anomalies, fleet, opportunities, price, nri) -> None:
+    """The two questions a foreman opens the console for: what broke overnight, and
+    what to do first."""
+    import core
+
+    active = [a for a in anomalies if not a.acknowledged]
+    highs = [a for a in active if a.severity == "HIGH"]
+    div = core.production_divergence_summary(fleet, anomalies)
+    left, right = st.columns(2)
+    with left:
+        pt.section("What Broke Overnight")
+        if not active:
+            st.success("Nothing new overnight — no active anomalies on the latest scan.")
+        else:
+            st.markdown(
+                pt.pill(f"{len(highs)} HIGH", "bad" if highs else "ok") + " "
+                + pt.pill(f"{div['n_down']} down", "bad" if div["n_down"] else "ok")
+                + " " + pt.pill(f"{div['n_divergences']} diverging",
+                                "warn" if div["n_divergences"] else "ok"),
+                unsafe_allow_html=True)
+            for a in (highs or active)[:4]:
+                st.markdown(f"- **{a.well_id}** ({a.category}) — {a.headline}")
+            if div["n_down"]:
+                st.caption("Down: " + ", ".join(d["well_id"] for d in div["down"][:6]))
+    with right:
+        pt.section("What To Do First")
+        steps = []
+        if not opportunities.empty:
+            t = opportunities.iloc[0]
+            steps.append(
+                f"**Authorize {t['well_id']}** — "
+                f"{str(t['recommended_intervention']).replace('_', ' ')} "
+                f"(risked NPV ${float(t['est_risked_npv']):,.0f}); build the AFE on "
+                "the **Action Chain**.")
+        if div["divergences"]:
+            a = div["divergences"][0]
+            net = float(getattr(a, "deferred_bopd", 0.0) or 0.0) * price * nri
+            steps.append(f"**Chase {a.well_id}** — the biggest live leak "
+                         f"(~${net:,.0f}/day net); details on the **Morning Brief**.")
+        if div["n_down"]:
+            steps.append(f"**Restore {div['down'][0]['well_id']}**"
+                         + (f" + {div['n_down'] - 1} more" if div["n_down"] > 1 else "")
+                         + " — zero production right now.")
+        if not steps:
+            steps.append("Hold — the fleet is on trend. Review the watch list on the "
+                         "**Triage Board**.")
+        for i, s in enumerate(steps[:3], 1):
+            st.markdown(f"{i}. {s}")
+
+
+def _loop_cards() -> None:
+    """Boxed quick-links into the loop (cards pop more than a plain link row)."""
+    import views
+    cards = [
+        ("Surveillance", "Fleet & per-well production · type-curve check"),
+        ("Morning Brief", "Overnight scan — what broke, money-first"),
+        ("Triage Board", "Fleet ranked by risked-NPV opportunity"),
+        ("Deferment Overview", "Where the barrels go, by cause"),
+        ("Action Chain", "Detect → predict → authorize an AFE"),
+    ]
+    cols = st.columns(len(cards))
+    for col, (title, desc) in zip(cols, cards):
+        page = views.PAGE_OBJECTS.get(title)
+        with col, st.container(border=True):
+            linked = False
+            if page is not None:
+                try:
+                    st.page_link(page)
+                    linked = True
+                except Exception:  # noqa: BLE001 — outside a navigation context
+                    linked = False
+            if not linked:
+                st.markdown(f"**{title}**")
+            st.caption(desc)
 
 
 def _fleet_health(fleet: dict, anomalies: list, board) -> None:
@@ -129,24 +197,6 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
                "signature (a relative ranking on this synthetic fleet, not a "
                "calibrated absolute probability) plus any non-$ data-quality flag. "
                "All figures deterministic — no API key required.")
-
-
-def _page_links() -> None:
-    """Quick links into the loop (uses the Page registry app.py fills; quietly
-    degrades to nothing when a view runs outside st.navigation, e.g. AppTest)."""
-    import views
-    wanted = ["Morning Brief", "Ongoing Events", "Deferment Overview",
-              "Triage Board", "Action Chain"]
-    pages = [views.PAGE_OBJECTS[t] for t in wanted if t in views.PAGE_OBJECTS]
-    if not pages:
-        return
-    cols = st.columns(len(pages))
-    for col, page in zip(cols, pages):
-        with col:
-            try:
-                st.page_link(page)
-            except Exception:  # noqa: BLE001 — outside a navigation context
-                return
 
 
 def core_fleet_size() -> int:
