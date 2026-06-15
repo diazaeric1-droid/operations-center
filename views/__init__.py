@@ -23,6 +23,7 @@ from views import (  # noqa: E402
     data_sources,
     deferment_overview,
     home,
+    methods,
     morning_brief,
     ongoing_events,
     recovery_queue,
@@ -60,6 +61,8 @@ PAGES: dict[str, list[tuple[str, str, str, object, bool]]] = {
     "Data": [
         ("Sources & BYOD", ":material/database:", "sources",
          data_sources.render, False),
+        ("Methods & Limitations", ":material/fact_check:", "methods",
+         methods.render, False),
     ],
 }
 

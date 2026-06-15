@@ -70,7 +70,8 @@ def render() -> None:
 
     _fleet_health(fleet, anomalies, b)
 
-    _what_broke_and_next(anomalies, fleet, opportunities, price, nri)
+    events = c.replay_events(token, price, False)
+    _what_broke_and_next(anomalies, fleet, opportunities, price, nri, events)
 
     pt.section("The Morning Loop",
                "Jump straight to the work — surveillance → brief → triage → "
@@ -90,30 +91,45 @@ def render() -> None:
     theme.references(["arps", "deferment", "npv"])
 
 
-def _what_broke_and_next(anomalies, fleet, opportunities, price, nri) -> None:
+def _what_broke_and_next(anomalies, fleet, opportunities, price, nri, events) -> None:
     """The two questions a foreman opens the console for: what broke overnight, and
-    what to do first."""
+    what to do first. 'What Broke Overnight' is a true day-over-day DIFF off the event
+    state machine — what's NEW, what RESOLVED, what's STILL down — not a stateless
+    re-list of today's scan."""
     import core
 
     active = [a for a in anomalies if not a.acknowledged]
-    highs = [a for a in active if a.severity == "HIGH"]
     div = core.production_divergence_summary(fleet, anomalies)
+    evs = [e for e in events if not getattr(e, "acknowledged", False)]
+    new = [e for e in evs if e.state == "NEW"]
+    resolved = [e for e in evs if e.state == "RESOLVED"]
+    ongoing = [e for e in evs if e.state == "ONGOING"]
     left, right = st.columns(2)
     with left:
-        pt.section("What Broke Overnight")
-        if not active:
-            st.success("Nothing new overnight — no active anomalies on the latest scan.")
-        else:
-            st.markdown(
-                pt.pill(f"{len(highs)} HIGH", "bad" if highs else "ok") + " "
-                + pt.pill(f"{div['n_down']} down", "bad" if div["n_down"] else "ok")
-                + " " + pt.pill(f"{div['n_divergences']} diverging",
-                                "warn" if div["n_divergences"] else "ok"),
-                unsafe_allow_html=True)
-            for a in (highs or active)[:4]:
-                st.markdown(f"- **{a.well_id}** ({a.category}) — {a.headline}")
-            if div["n_down"]:
-                st.caption("Down: " + ", ".join(d["well_id"] for d in div["down"][:6]))
+        pt.section("What Broke Overnight",
+                   "The day-over-day delta from the event state machine.")
+        st.markdown(
+            pt.pill(f"{len(new)} new", "bad" if new else "ok") + " "
+            + pt.pill(f"{len(ongoing)} still ongoing", "warn" if ongoing else "ok")
+            + " " + pt.pill(f"{len(resolved)} resolved", "ok"),
+            unsafe_allow_html=True)
+        if not new and not resolved and not ongoing:
+            st.success("Nothing changed overnight — no new, ongoing, or just-resolved "
+                       "events on the latest scan.")
+        if new:
+            st.markdown("**🔴 New today**")
+            for e in sorted(new, key=lambda e: -float(getattr(e, "deferred_bopd", 0) or 0))[:4]:
+                st.markdown(f"- **{e.well_id}** — {e.event_type}")
+        if resolved:
+            st.markdown("**🟢 Resolved**")
+            st.caption(", ".join(f"{e.well_id} ({e.event_type})" for e in resolved[:6]))
+        if ongoing:
+            st.caption(f"Still ongoing: " + ", ".join(
+                f"{e.well_id} · {e.duration_days}d" for e in
+                sorted(ongoing, key=lambda e: -e.duration_days)[:5]))
+        if div["n_down"]:
+            st.caption("Down right now: "
+                       + ", ".join(d["well_id"] for d in div["down"][:6]))
     with right:
         pt.section("What To Do First")
         steps = []

@@ -614,6 +614,62 @@ def triage_scorecard(board) -> dict | None:
             "at_k": at_k, "recall_at_n_impaired": recall}
 
 
+def fit_well_decline(scada, fit_frac: float = 0.8) -> dict | None:
+    """Fit an exponential decline to a well's oil on its ESTABLISHED trend (the first
+    ``fit_frac`` of history) and extrapolate, so recent under-performance shows as a gap
+    BELOW the curve — the per-well 'is this well on its type curve, or deferring?' read
+    that the fleet-level chart only answers in aggregate. Returns the expected series
+    aligned to the full history plus the trailing variance vs that curve. None if the
+    history is too short / too gappy to fit."""
+    import numpy as np
+    try:
+        oil = np.asarray(scada["bopd"], dtype=float)
+        dates = scada["date"]
+    except Exception:  # noqa: BLE001
+        return None
+    n = len(oil)
+    if n < 30:
+        return None
+    t = np.arange(n, dtype=float)
+    fit_n = max(30, int(n * fit_frac))
+    pos = oil[:fit_n] > 0
+    if int(pos.sum()) < 10:
+        return None
+    Di, lnqi = np.polyfit(t[:fit_n][pos], np.log(oil[:fit_n][pos]), 1)
+    expected = np.exp(lnqi) * np.exp(Di * t)
+    recent_act = float(np.nanmean(oil[-7:]))
+    recent_exp = float(np.nanmean(expected[-7:]))
+    var_pct = 100.0 * (recent_act - recent_exp) / recent_exp if recent_exp else 0.0
+    return {"dates": dates, "expected": expected, "var_pct": var_pct,
+            "implied_deferment_bopd": max(recent_exp - recent_act, 0.0),
+            "annual_decline_pct": float((1 - np.exp(Di * 365)) * 100)}
+
+
+def well_tiers(fleet: dict, board) -> dict:
+    """Per-well health tier for the fleet map: 'down' | 'watch' | 'healthy'. A well is
+    DOWN if at/near zero vs its baseline, WATCH if deferring production or in the
+    fleet's own elevated-risk quartile (fleet-relative — the ESP score is OOD here),
+    else HEALTHY."""
+    import numpy as np
+    has_board = board is not None and not getattr(board, "empty", True)
+    risk = (dict(zip(board["well_id"].astype(str), board["failure_risk_30d"].astype(float)))
+            if has_board else {})
+    deferred = (dict(zip(board["well_id"].astype(str), board["deferred_bopd"].astype(float)))
+                if has_board and "deferred_bopd" in board else {})
+    thr = float(np.quantile(list(risk.values()), 0.75)) if risk else 1.0
+    out: dict[str, str] = {}
+    for wid, df in fleet.items():
+        wid = str(wid)
+        last, base = _latest_and_baseline(df)
+        if _is_down(last, base):
+            out[wid] = "down"
+        elif deferred.get(wid, 0.0) > 0 or risk.get(wid, 0.0) >= thr:
+            out[wid] = "watch"
+        else:
+            out[wid] = "healthy"
+    return out
+
+
 def well_scada(alert_or_csv) -> "object":
     """Load the well's SCADA (with the digest's bopd column) for plotting."""
     csv = alert_or_csv["scada_csv"] if isinstance(alert_or_csv, dict) else alert_or_csv
