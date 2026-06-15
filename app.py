@@ -99,7 +99,7 @@ if st.session_state["well_id"] not in _well_ids:
 # the controls that drive this console. Data provenance lives on Sources & BYOD.
 pt.product_switcher("ops")
 with st.sidebar:
-    st.subheader("Well file")
+    st.subheader("Well File")
     if _well_ids:
         st.selectbox("Selected well (Well File pages)", _well_ids, key="well_id",
                      help="Drives Well 360 and Action Chain. Pick from the "
