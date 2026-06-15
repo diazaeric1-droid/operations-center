@@ -4,6 +4,36 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-06-14
+
+ESP model recalibrated on the digest fleet.
+
+### Changed
+- **The ESP failure-risk model is now trained ON the digest fleet** — the fleet the
+  console actually scores — using the generator's ground-truth fault labels, instead
+  of being trained on the ESP component's *different* fleet and scoring this one
+  out-of-distribution. The 30-day failure score is now a **Platt-calibrated
+  probability** that separates impaired wells (~0.82) from healthy ones (~0.04),
+  rather than a uniform ~0.5 blob the console could only rank relatively. Honest
+  **out-of-fold** eval (stratified CV) is persisted and shown on a new **model card**
+  (Methods & Limitations): AUROC, Brier, precision@10%, calibrated flag, n-impaired.
+  *The high AUROC (≈0.99) is disclosed as an upper bound on clean separable synthetic
+  signatures — not a real-world claim; ~0.85 is what real-well data would show.*
+- **Board reads cleaner as a result:** healthy wells now correctly fall into the
+  no-action tier (their calibrated risk is low) instead of everything looking
+  "active" under OOD scores — ~60 stable / ~26 opportunities / ~8 watch.
+- All "fleet-relative, not a calibrated probability — ignore the absolute number"
+  disclaimers across Home / Triage / Well 360 / Action Chain are replaced with the
+  honest calibrated framing pointing at the model card.
+
+### Notes
+- Bootstrap **self-heals an old OOD-trained artifact**: a model without the new
+  `esp_eval.json` marker is retrained on the digest fleet (so warm containers and old
+  checkouts upgrade automatically).
+- **Parity preserved**: both `core` and `pipeline_core` load the same retrained
+  artifact, so the `rank_fleet ≡ pipeline_core` invariant still holds — no
+  certified-math change. 45 tests pass.
+
 ## [0.6.0] — 2026-06-14
 
 The remaining audit levers + the minor leftovers.

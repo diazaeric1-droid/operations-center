@@ -222,10 +222,10 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
         + " " + pt.pill(f"{n_high} HIGH-severity alert{'s' if n_high != 1 else ''}",
                         "bad" if n_high else "ok"),
         unsafe_allow_html=True)
-    st.caption("Watch = the fleet's own highest-risk quartile by ESP failure "
-               "signature (a relative ranking on this synthetic fleet, not a "
-               "calibrated absolute probability) plus any non-$ data-quality flag. "
-               "All figures deterministic — no API key required.")
+    st.caption("Watch = the fleet's own highest-risk quartile by the ESP failure "
+               "signature (a Platt-calibrated probability from a model trained on this "
+               "fleet's labeled faults; model card on Methods & Limitations) plus any "
+               "non-$ data-quality flag. All figures deterministic — no API key required.")
 
 
 def core_fleet_size() -> int:
