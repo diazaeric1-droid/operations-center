@@ -83,6 +83,7 @@ esp_explainer = importlib.import_module("esp.explainer")
 afe_handoff = importlib.import_module("afe.handoff")
 afe_cost_db = importlib.import_module("afe.cost_db")
 afe_economics = importlib.import_module("afe.economics")
+afe_tracker = importlib.import_module("afe.tracker")  # authority-limit approval routing
 # Suite-wide economics kernel, vendored inside the AFE app and reused here so the
 # triage board risks cash flows with the exact same convention as the AFE it chains.
 econ_core = importlib.import_module("afe.econ_core")
@@ -597,24 +598,42 @@ def economic_limit(scada, realized_price: float = 70.0,
                    loe_per_month: float = ECONOMIC_LIMIT_LOE_PER_MONTH) -> dict | None:
     """Economic limit + remaining producing life for a well: the oil rate at which net
     revenue equals fixed lease operating expense (the rate you'd P&A at), and the months
-    from today's rate — declining at the well's own fitted exponential rate — to reach
-    it. The number a PE defends in a reserves/abandonment review. None if not estimable."""
+    from today's PRODUCING rate — declining at the well's ESTABLISHED-trend rate — to
+    reach it. The number a PE defends in a reserves/abandonment review.
+
+    Two guards keep this honest on troubled wells (which a reviewer opens first):
+    - it returns ``{"status": "down"}`` for a well that is currently shut in / collapsed
+      (a reserves read on a well that's offline is meaningless — restore it first);
+    - it fits the decline on the ESTABLISHED trend (the same first-80% basis as the
+      type-curve overlay, via ``fit_well_decline``), so a recent multi-day outage isn't
+      read as terminal exponential decline (which produced absurd '1.1 yr remaining'
+      numbers). None if not estimable."""
     import numpy as np
+    fit = fit_well_decline(scada)
+    if fit is None:
+        return None
     try:
         oil = np.asarray(scada["bopd"], dtype=float)
     except Exception:  # noqa: BLE001
         return None
-    oil = oil[np.isfinite(oil) & (oil > 0)]
+    oil = oil[np.isfinite(oil)]
     if len(oil) < 30:
         return None
     margin = realized_price * net_revenue_interest - opex_per_bbl   # net $/bbl
     if margin <= 0:
         return None
     q_limit = loe_per_month / (margin * 30.4)                       # bopd at the limit
-    q_now = float(np.mean(oil[-30:]))
-    t = np.arange(len(oil), dtype=float)
-    fit_n = min(len(oil), 180)
-    Di = float(np.polyfit(t[-fit_n:], np.log(oil[-fit_n:]), 1)[0])  # 1/day, <0 for a decliner
+    # Robust current rate: median of the last 30 PRODUCING days (ignore outage zeros),
+    # not a mean that a 6-day shut-in would crater — or inflate (an offline well's mean
+    # over a window that still contains pre-outage days reads far above today's rate).
+    recent = oil[-30:]
+    producing = recent[recent > 1.0]
+    q_now = float(np.median(producing)) if len(producing) >= 5 else float(np.median(recent))
+    # Currently down/collapsed? Today's rate far below the recent producing rate.
+    if float(oil[-1]) < max(1.0, 0.25 * q_now):
+        return {"status": "down", "q_now_bopd": q_now,
+                "net_margin_per_bbl": margin, "loe_per_month": loe_per_month}
+    Di = fit["Di_per_day"]                                          # established-trend, <0
     d_monthly = -Di * 30.4
     if q_now <= q_limit:
         months = 0.0
@@ -622,9 +641,10 @@ def economic_limit(scada, realized_price: float = 70.0,
         months = float("inf")                                       # flat/rising: no limit in sight
     else:
         months = float(np.log(q_now / q_limit) / d_monthly)
-    return {"q_limit_bopd": q_limit, "q_now_bopd": q_now, "months_remaining": months,
-            "net_margin_per_bbl": margin, "loe_per_month": loe_per_month,
-            "annual_decline_pct": float((1 - np.exp(Di * 365)) * 100)}
+    return {"status": "ok", "q_limit_bopd": q_limit, "q_now_bopd": q_now,
+            "months_remaining": months, "net_margin_per_bbl": margin,
+            "loe_per_month": loe_per_month,
+            "annual_decline_pct": fit["annual_decline_pct"]}
 
 
 def triage_scorecard(board) -> dict | None:
@@ -685,13 +705,15 @@ def fit_well_decline(scada, fit_frac: float = 0.8) -> dict | None:
     var_pct = 100.0 * (recent_act - recent_exp) / recent_exp if recent_exp else 0.0
     return {"dates": dates, "expected": expected, "var_pct": var_pct,
             "implied_deferment_bopd": max(recent_exp - recent_act, 0.0),
+            "Di_per_day": float(Di),                                   # established-trend decline
             "annual_decline_pct": float((1 - np.exp(Di * 365)) * 100)}
 
 
 def well_tiers(fleet: dict, board) -> dict:
     """Per-well health tier for the fleet map: 'down' | 'watch' | 'healthy'. A well is
     DOWN if at/near zero vs its baseline, WATCH if deferring production or in the
-    fleet's own elevated-risk quartile (fleet-relative — the ESP score is OOD here),
+    fleet's own elevated-risk quartile (a robust fleet-relative cut on the calibrated
+    ESP score),
     else HEALTHY."""
     import numpy as np
     has_board = board is not None and not getattr(board, "empty", True)

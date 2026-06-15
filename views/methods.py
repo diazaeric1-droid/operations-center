@@ -42,8 +42,9 @@ def render() -> None:
         "silently compounds to 10.47%). The deck's discount control does not re-rate "
         "the certified chain math.\n"
         "- **Monte-Carlo** (Action Chain) draws 10,000 trials over the three biggest "
-        "uncertainties (incremental rate, uplift decline, realized price); its P50 "
-        "reconciles exactly with the deterministic Net NPV.")
+        "uncertainties (incremental rate, uplift decline, realized price); its **base "
+        "case** (mean of the inputs) reconciles exactly with the deterministic Net NPV, "
+        "and the P50 sits slightly below it because the NPV distribution is right-skewed.")
 
     pt.section("ESP failure-risk model card")
     ev = _esp_eval()

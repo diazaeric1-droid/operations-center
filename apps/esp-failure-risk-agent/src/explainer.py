@@ -29,12 +29,20 @@ Style rules:
 
 # ---- deterministic failure-mode classifier --------------------------------
 
-def classify_failure_mode(feature_values: dict[str, float]) -> tuple[str, str]:
-    """Map an engineered feature row to a suspected ESP failure mode + evidence.
+def classify_failure_mode(
+    feature_values: dict[str, float], lift: str | None = None
+) -> tuple[str, str]:
+    """Map an engineered feature row to a suspected failure mode + evidence.
 
     Returns (mode_label, evidence). Rules are ordered by specificity; the first
     match wins. This is intentionally simple and auditable — it grounds the LLM
     narration and is shown to the user alongside the risk score.
+
+    Detection is deterministic and lift-agnostic (the rules read generic,
+    SCADA-derived features). ``lift`` only specializes the *wording*: an ESP — or
+    unknown/None — lift reproduces the original ESP phrasing byte-for-byte, while a
+    rod-pump / gas-lift / flowing well gets physically correct terminology, since a
+    well with no ESP has no intake, motor, VSD, or pump stages to talk about.
     """
     f = feature_values
     g = lambda k, d=0.0: float(f.get(k, d))
@@ -51,37 +59,115 @@ def classify_failure_mode(feature_values: dict[str, float]) -> tuple[str, str]:
     bfpd_slope = g("bfpd_slope_30d")
     runtime_mean = g("runtime_last7_mean", 99.0)
     freq_slope = g("drive_freq_slope_30d")
+    v = dict(imb_max=imb_max, imb_days=imb_days, bfpd_cv=bfpd_cv, downtime=downtime,
+             intake_mean=intake_mean, intake_slope=intake_slope, amps_slope=amps_slope,
+             temp_slope=temp_slope, bfpd_slope=bfpd_slope, runtime_mean=runtime_mean,
+             freq_slope=freq_slope)
 
     # 1) Electrical / current imbalance — the imbalance channel is the tell.
     if imb_max >= 9 or imb_days >= 2:
-        return ("Electrical — current imbalance / incipient motor short",
-                f"current imbalance peaked at {imb_max:.0f}% ({int(imb_days)} day(s) >8%); "
-                f"megger the motor and cable before the next start.")
-
+        return _phrase_mode("electrical", lift, v)
     # 2) Gas lock / pump-off cycling — flow volatility + runtime cycling, freq rising.
     if bfpd_cv >= 0.15 and downtime >= 3:
-        return ("Gas lock — pump-off cycling",
-                f"production volatile (CV {bfpd_cv:.0%}) with {int(downtime)} low-runtime day(s)"
-                + (f" and drive frequency climbing {freq_slope:+.2f} Hz/d" if freq_slope > 0.05 else "")
-                + "; review gas handling / install a separator and check VSD pump-off setpoints.")
-
+        return _phrase_mode("gas_lock", lift, v)
     # 3) Gas interference — smooth intake collapse.
     if low_intake_days >= 2 or (intake_slope <= -1.0 and intake_mean < 90):
-        return ("Gas interference — intake pressure collapse",
-                f"intake at {intake_mean:.0f} psi, trending {intake_slope:+.1f} psi/d; "
-                f"reduce drawdown / adjust frequency and evaluate a gas separator.")
-
+        return _phrase_mode("gas_interference", lift, v)
     # 4) Scale / abrasive buildup — amps & temp creeping together, intake holding.
     if amps_slope >= 0.15 and temp_slope >= 0.10:
-        return ("Scale / abrasive buildup",
-                f"motor amps creeping {amps_slope:+.2f} A/d and temperature {temp_slope:+.2f} °F/d "
-                f"with stable intake; schedule a scale-inhibitor squeeze / acid treatment.")
-
+        return _phrase_mode("scale", lift, v)
     # 5) Downthrust / reservoir decline — rate slumping, runtime down, amps not rising.
     if bfpd_slope <= -8 and runtime_mean < 96 and amps_slope < 0.15:
-        return ("Downthrust / declining inflow",
-                f"production sliding {bfpd_slope:+.0f} bbl/d with runtime at {runtime_mean:.0f}%; "
-                f"verify pump is within POR and consider a re-rate or smaller stage count.")
+        return _phrase_mode("downthrust", lift, v)
+    return _phrase_mode("unclear", lift, v)
+
+
+def _phrase_mode(cond: str, lift: str | None, v: dict[str, float]) -> tuple[str, str]:
+    """Render (mode_label, evidence) for a detected condition in the language of the
+    well's artificial-lift type. ESP / unknown / None lift reproduces the original ESP
+    wording exactly; rod-pump, gas-lift, and flowing wells get lift-correct terms and
+    next steps (no megger, no VSD frequency, no pump POR / stage count where there is
+    no ESP)."""
+    esp = lift not in ("Rod pump", "Gas lift", "Flowing")
+
+    if cond == "electrical":
+        if esp:
+            return ("Electrical — current imbalance / incipient motor short",
+                    f"current imbalance peaked at {v['imb_max']:.0f}% ({int(v['imb_days'])} day(s) >8%); "
+                    f"megger the motor and cable before the next start.")
+        if lift == "Rod pump":
+            return ("Electrical — surface motor / drive imbalance",
+                    f"current imbalance peaked at {v['imb_max']:.0f}% ({int(v['imb_days'])} day(s) >8%); "
+                    "inspect the surface motor, drive, and electrical service.")
+        return (f"Electrical signal anomaly — no motor on a {lift.lower()} well",
+                f"current-imbalance channel peaked at {v['imb_max']:.0f}% "
+                f"({int(v['imb_days'])} day(s) >8%), but this lift has no motor; "
+                "verify the SCADA instrumentation.")
+
+    if cond == "gas_lock":
+        if esp:
+            return ("Gas lock — pump-off cycling",
+                    f"production volatile (CV {v['bfpd_cv']:.0%}) with {int(v['downtime'])} low-runtime day(s)"
+                    + (f" and drive frequency climbing {v['freq_slope']:+.2f} Hz/d" if v['freq_slope'] > 0.05 else "")
+                    + "; review gas handling / install a separator and check VSD pump-off setpoints.")
+        if lift == "Rod pump":
+            return ("Gas lock / pump pounding",
+                    f"production volatile (CV {v['bfpd_cv']:.0%}) with {int(v['downtime'])} low-runtime day(s); "
+                    "improve pump fillage (SPM / pump-off controller) and set a gas anchor.")
+        if lift == "Gas lift":
+            return ("Unstable lift — heading / slugging",
+                    f"production volatile (CV {v['bfpd_cv']:.0%}) with {int(v['downtime'])} low-flow day(s); "
+                    "stabilize lift-gas injection (rate / valve depth) to damp heading.")
+        return ("Slugging / liquid loading",
+                f"production volatile (CV {v['bfpd_cv']:.0%}) with {int(v['downtime'])} low-flow day(s); "
+                "evaluate a velocity string or artificial-lift conversion.")
+
+    if cond == "gas_interference":
+        if esp:
+            return ("Gas interference — intake pressure collapse",
+                    f"intake at {v['intake_mean']:.0f} psi, trending {v['intake_slope']:+.1f} psi/d; "
+                    f"reduce drawdown / adjust frequency and evaluate a gas separator.")
+        if lift == "Rod pump":
+            return ("Gas interference / fluid pound",
+                    f"pump intake at {v['intake_mean']:.0f} psi, trending {v['intake_slope']:+.1f} psi/d; "
+                    "set a gas anchor and adjust pump fillage.")
+        if lift == "Gas lift":
+            return ("Gas interference — unstable lift",
+                    f"flowing pressure at {v['intake_mean']:.0f} psi, trending {v['intake_slope']:+.1f} psi/d; "
+                    "review lift-gas injection rate and valve performance.")
+        return ("Pressure decline / liquid loading",
+                f"flowing bottomhole pressure at {v['intake_mean']:.0f} psi, trending "
+                f"{v['intake_slope']:+.1f} psi/d; evaluate stimulation or an artificial-lift conversion.")
+
+    if cond == "scale":
+        if esp:
+            return ("Scale / abrasive buildup",
+                    f"motor amps creeping {v['amps_slope']:+.2f} A/d and temperature {v['temp_slope']:+.2f} °F/d "
+                    f"with stable intake; schedule a scale-inhibitor squeeze / acid treatment.")
+        if lift == "Rod pump":
+            return ("Scale / abrasive buildup",
+                    f"motor load creeping {v['amps_slope']:+.2f} A/d and temperature {v['temp_slope']:+.2f} °F/d; "
+                    "schedule a scale-inhibitor squeeze / acid treatment.")
+        return ("Scale / tubing restriction",
+                f"surface signature creeping up ({v['amps_slope']:+.2f}/d) with rising temperature "
+                f"({v['temp_slope']:+.2f} °F/d); schedule a scale-inhibitor squeeze / acid treatment.")
+
+    if cond == "downthrust":
+        if esp:
+            return ("Downthrust / declining inflow",
+                    f"production sliding {v['bfpd_slope']:+.0f} bbl/d with runtime at {v['runtime_mean']:.0f}%; "
+                    f"verify pump is within POR and consider a re-rate or smaller stage count.")
+        if lift == "Rod pump":
+            return ("Declining inflow / pump underload",
+                    f"production sliding {v['bfpd_slope']:+.0f} bbl/d with runtime at {v['runtime_mean']:.0f}%; "
+                    "review the dynamometer card / pump fillage and consider a re-rate or downsize.")
+        if lift == "Gas lift":
+            return ("Declining inflow / reservoir decline",
+                    f"production sliding {v['bfpd_slope']:+.0f} bbl/d; optimize lift-gas "
+                    "(injection rate / valve depth) and confirm reservoir decline.")
+        return ("Declining inflow / reservoir decline",
+                f"production sliding {v['bfpd_slope']:+.0f} bbl/d; confirm reservoir decline and "
+                "evaluate stimulation or an artificial-lift conversion.")
 
     return ("Unclear — multiple weak signals",
             "no single dominant signature; review the trend plot and recent well work before acting.")

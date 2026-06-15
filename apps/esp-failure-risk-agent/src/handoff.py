@@ -88,8 +88,12 @@ def diagnose(scada_csv, well_id: str | None = None, deferred_bopd: float = 0.0,
     X = pd.DataFrame([feats])[FEATURE_NAMES]
     model = ESPRiskModel.load(model_path)
     risk = float(model.predict_proba(X)[0])
-    mode, evidence = classify_failure_mode(feats)
+    mode, evidence = classify_failure_mode(feats, lift)
     interv, frac = _map_mode(mode, lift)
+    # The model is generic ground-truth-trained; only ESP (or unknown/None lift)
+    # wells carry the literal "ESP" in the surfaced risk phrasing — a gas-lift,
+    # rod-pump, or flowing well has no ESP.
+    risk_phrase = "ESP 30-day failure risk" if lift in (None, "ESP") else "30-day failure risk"
 
     # Uplift = what the workover protects/restores: the upstream-quantified deferral
     # if present, else a mode-dependent fraction of the well's recent rate (floored).
@@ -102,7 +106,7 @@ def diagnose(scada_csv, well_id: str | None = None, deferred_bopd: float = 0.0,
         "field": field,
         "operator": operator,
         "intervention": interv,
-        "primary_diagnosis": f"{mode}. ESP 30-day failure risk {risk:.0%}. {evidence}",
+        "primary_diagnosis": f"{mode}. {risk_phrase} {risk:.0%}. {evidence}",
         "incremental_rate_bopd": uplift,
         "expected_uplift_decline_per_yr": 0.6,
         "requested_by": "ESP Failure-Risk Agent (auto)",
