@@ -2,9 +2,10 @@
 
 The console runs on TWO datasets at different cadences. They are not joined:
 
-* Surveillance fleet (Today + Well File) — synthetic DAILY SCADA, 50 wells,
+* Surveillance fleet (Today + Well File) — synthetic DAILY SCADA (100 wells),
   known ground truth. Public production data is monthly, so daily SCADA must be
   modeled; the digest's detectors are backtested against seeded faults + decoys.
+  (The well count is rendered dynamically in-page from the bootstrapped fleet.)
 * Loss-accounting book (Loss Accounting) — SYNTHETIC reason-coded monthly fleet by
   default (40 wells, ground-truth causes), so cause attribution / MTTR / recovery
   queue all run. Bring your own monthly book (or a real public extract) below.
@@ -39,11 +40,12 @@ def render() -> None:
     ])
 
     pt.section("Two Datasets, No Fake Join")
+    n_scada = len(c.scada_well_ids())  # rendered from the bootstrapped fleet, never stale
     st.markdown(
         "| Console area | Dataset | Cadence | Provenance |\n"
         "|---|---|---|---|\n"
         "| Today + Well File | Surveillance fleet (SCADA) | Daily | **Synthetic** "
-        "modeled Permian fleet, 50 wells, known ground truth |\n"
+        f"modeled Permian fleet, {n_scada} wells, known ground truth |\n"
         "| Loss Accounting | Production book | Monthly | **Synthetic** reason-coded "
         "fleet, 40 wells, ground-truth causes — bring your own monthly book below |\n")
     st.caption(
@@ -127,9 +129,11 @@ def render() -> None:
     pt.section("Provenance Notes")
     st.markdown(
         "- **Synthetic SCADA fleet** (Today + Well File) — regenerated "
-        "deterministically on first run (seeded per well); 6 seeded anomalies + 4 "
-        "near-threshold decoys give the detectors an honest backtest (committed "
-        "snapshot: event precision 0.80, recall 1.00).\n"
+        "deterministically on first run (seeded per well); failure signatures across "
+        "seven modes (gas interference/lock, scale, downthrust, electrical, shut-in, "
+        "rate-loss) plus near-threshold decoys give the detectors an honest backtest "
+        "(not a trivial 1.0). Each signature is seeded only on wells whose "
+        "artificial-lift type it can physically occur on.\n"
         "- **Synthetic reason-coded fleet** (Loss Accounting) — modeled monthly book "
         "with a ground-truth cause on every event, so the $-Pareto, MTTR, recovery "
         "queue, and the classifier eval all run; the classifier is scored against "

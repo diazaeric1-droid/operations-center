@@ -3,7 +3,7 @@ name: daily-brief-email
 # Emails the Operations Center morning brief every morning.
 # Configure the SMTP secrets under Settings → Secrets and variables → Actions:
 #   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, BRIEF_FROM, BRIEF_TO
-# (BRIEF_OIL_PRICE / BRIEF_SUBJECT optional). The job no-ops cleanly if SMTP_HOST
+# (BRIEF_OIL_PRICE / BRIEF_NRI / BRIEF_SUBJECT optional). The job no-ops cleanly if SMTP_HOST
 # is unset, so the workflow can be committed before secrets are wired.
 
 on:
@@ -12,10 +12,16 @@ on:
     - cron: "30 12 * * *"
   workflow_dispatch: {}
 
+# Prevent overlapping manual + scheduled runs from double-sending the brief.
+concurrency:
+  group: daily-brief
+  cancel-in-progress: false
+
 jobs:
   send:
     name: compose + email the morning brief
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,6 +40,7 @@ jobs:
           BRIEF_FROM: ${{ secrets.BRIEF_FROM }}
           BRIEF_TO: ${{ secrets.BRIEF_TO }}
           BRIEF_OIL_PRICE: ${{ secrets.BRIEF_OIL_PRICE }}
+          BRIEF_NRI: ${{ secrets.BRIEF_NRI }}
           BRIEF_SUBJECT: ${{ secrets.BRIEF_SUBJECT }}
         run: |
           if [ -z "$SMTP_HOST" ]; then

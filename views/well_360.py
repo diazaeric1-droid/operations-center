@@ -18,21 +18,9 @@ import theme
 
 from views import _common as c
 
-# Lift-specific diagnostic channels shown under the production streams.
-_LIFT_DIAG = {
-    "Gas lift": [("gas_inj_mcfd", "Lift-gas injection (MCF/d)", theme.TEAL),
-                 ("casing_pressure_psi", "Casing pressure (psi)", theme.PURPLE),
-                 ("tubing_pressure_psi", "Tubing pressure (psi)", theme.BLUE)],
-    "ESP": [("intake_pressure_psi", "Intake pressure (psi)", theme.PURPLE),
-            ("motor_temp_f", "Motor temp (°F)", theme.RED),
-            ("motor_amps", "Motor amps (A)", theme.GREEN),
-            ("current_imbalance_pct", "Current imbalance (%)", theme.AMBER)],
-    "Rod pump": [("runtime_pct", "Runtime (%)", theme.GREEN),
-                 ("motor_amps", "Motor load (A)", theme.AMBER)],
-    # Flowing wells have no downhole pump; the production streams carry the review,
-    # with downhole pressure as the one diagnostic the synthetic SCADA provides.
-    "Flowing": [("intake_pressure_psi", "Downhole pressure (psi)", theme.PURPLE)],
-}
+# Lift-specific diagnostic channels shown under the production streams — the SINGLE
+# shared definition (Surveillance uses the same one) so the two pages can't diverge.
+_LIFT_DIAG = c.LIFT_CHANNELS
 
 
 def _sync_well() -> None:
@@ -116,7 +104,9 @@ def render() -> None:
     _trend_chart(core.well_scada(alert), meta, alert if flagged else None)
     theme.source_note(
         f"Daily channels for a {meta.lift} well. Water = gross fluid − oil. The "
-        "dashed marker is the date of today's digest alert for this well.")
+        "dashed marker is the date of today's digest alert for this well. The chart "
+        f"shows the most recent SCADA window, not the full history since "
+        f"{hist['online_since']} ({hist['years_online']} yr online).")
     if flagged:
         st.markdown(f"**{alert['category']}** · severity **{alert['severity']}** — "
                     f"{alert['headline']}")

@@ -19,18 +19,10 @@ import theme
 
 from views import _common as c
 
-# Per-lift diagnostic channels for the per-well drill-down: (column, label, color).
-_LIFT_CHANNELS = {
-    "Gas lift": [("gas_inj_mcfd", "Lift-gas injection (MCF/d)", theme.TEAL),
-                 ("casing_pressure_psi", "Casing pressure (psi)", theme.PURPLE),
-                 ("tubing_pressure_psi", "Tubing pressure (psi)", theme.BLUE)],
-    "ESP": [("intake_pressure_psi", "Intake pressure (psi)", theme.PURPLE),
-            ("motor_amps", "Motor amps (A)", theme.GREEN),
-            ("current_imbalance_pct", "Current imbalance (%)", theme.RED)],
-    "Rod pump": [("runtime_pct", "Runtime (%)", theme.GREEN),
-                 ("motor_amps", "Motor load (A)", theme.AMBER)],
-    "Flowing": [("intake_pressure_psi", "Downhole pressure (psi)", theme.PURPLE)],
-}
+# Per-lift diagnostic channels for the per-well drill-down — the SINGLE shared
+# definition (Well 360 imports the same one) so the two pages can't diverge on which
+# channels / colors a lift type shows.
+_LIFT_CHANNELS = c.LIFT_CHANNELS
 
 _RANGES = {"90 days": 90, "180 days": 180, "1 year": 365, "Lifetime": 10_000}
 
@@ -184,10 +176,13 @@ def _typecurve_chart(ff: pd.DataFrame) -> None:
     recent_act = float(oil[-7:].mean())
     recent_exp = float(expected[-7:].mean())
     var_pct = 100.0 * (recent_act - recent_exp) / recent_exp if recent_exp else 0.0
+    # Effective annual decline = 1 − exp(Di·365) (Di is per-day, negative for a
+    # decliner). The earlier exp(|Di|·365)−1 form overstated it (~12% vs ~10%).
+    eff_annual_decline = (1.0 - np.exp(Di * 365.0)) * 100.0
     cols = st.columns(3)
-    cols[0].metric("Annual decline (fit)", f"{(1 - np.exp(-Di * 365)) * -100:,.0f}%"
-                   if Di < 0 else f"{(np.exp(-Di * 365) - 1) * -100:,.0f}%",
-                   help="Effective annual decline from the exponential fit.")
+    cols[0].metric("Annual decline (fit)", f"{eff_annual_decline:,.0f}%",
+                   help="Effective annual decline from the exponential fit "
+                        "(1 − exp(Di·365), Di in 1/day).")
     cols[1].metric("Actual vs type curve", f"{var_pct:+.1f}%",
                    delta="below curve" if var_pct < -1 else "on/above curve",
                    delta_color="inverse" if var_pct < -1 else "off",
@@ -229,8 +224,10 @@ def _well_charts(df, meta, win: int) -> None:
     st.plotly_chart(theme.style_fig(fig, height=150 * len(rows) + 40, legend=False),
                     width="stretch")
     note = {"Gas lift": "Gas-lift wells: watch injection rate vs casing pressure — "
-                        "falling injection with rising casing is a valve/compressor "
-                        "issue (restore injection to recover rate).",
+                        "falling injection with RISING casing is a downhole "
+                        "valve/orifice (or annulus) problem; falling injection with "
+                        "FALLING casing points upstream to the compressor / gas "
+                        "supply. Either way, restore injection to recover rate.",
             "ESP": "ESP wells: intake pressure, motor amps and current imbalance are "
                    "the failure-signature channels the ESP risk model scores.",
             "Rod pump": "Rod-pump wells: runtime and motor load proxy pump fillage / "

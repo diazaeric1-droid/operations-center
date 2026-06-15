@@ -26,7 +26,7 @@ def render() -> None:
     pt.context_bar([
         ("Surveillance fleet", c.scada_source_label(c.DISK_TOKEN)),
         ("Deck", c.deck_label()),
-        ("Ranking", "risked NPV = intervention net NPV × 30-day ESP failure signal"),
+        ("Ranking", "risked NPV = risk × PV(net revenue) − intervention cost"),
     ])
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
@@ -36,6 +36,12 @@ def render() -> None:
         pt.empty_state("No wells in the fleet — nothing to triage.",
                        "Run bootstrap (first app start) to generate the fleet.")
         return
+    import core
+    if core.risk_scoring_degraded():
+        st.warning("⚠️ **ESP risk model unavailable** — every well is showing the "
+                   f"baseline {core.BASELINE_RISK_30D:.0%} failure risk, so this "
+                   "ranking reflects deferred production only, not the failure signal. "
+                   "Re-run bootstrap or check the model artifact / dependencies.")
     opportunities, watch, stable = c.triage_tiers(board)
 
     pt.kpi_row([
@@ -86,9 +92,10 @@ def render() -> None:
             theme.style_fig(bar, height=max(280, 30 * len(top) + 90), legend=False),
             width="stretch")
         theme.source_note(
-            "Risked NPV = net-to-operator NPV of the recommended intervention (AFE "
-            "cost rollup + PV10 economics at the deck price/NRI) × the ESP 30-day "
-            "failure signal. The bar is labeled with the intervention to run.")
+            "Risked NPV = the ESP 30-day failure signal × PV(net revenue the "
+            "intervention protects) − the intervention cost (AFE cost rollup + PV10 "
+            "economics at the deck price/NRI). The cost is certain, so only the upside "
+            "is chance-weighted. The bar is labeled with the intervention to run.")
         c.pinned_pv10_caption()
         hero = fr.get(str(opportunities["well_id"].iloc[0]))
         if hero.hero:

@@ -15,6 +15,25 @@ import pandas as pd
 import streamlit as st
 
 import core
+import theme
+
+# Canonical per-lift diagnostic channels for the per-well drill-downs, shared by
+# Surveillance and Well 360 so the two pages can NEVER show a different channel set
+# (or color) for the same lift type: (column, label, color).
+LIFT_CHANNELS: dict[str, list[tuple[str, str, str]]] = {
+    "Gas lift": [("gas_inj_mcfd", "Lift-gas injection (MCF/d)", theme.TEAL),
+                 ("casing_pressure_psi", "Casing pressure (psi)", theme.PURPLE),
+                 ("tubing_pressure_psi", "Tubing pressure (psi)", theme.BLUE)],
+    "ESP": [("intake_pressure_psi", "Intake pressure (psi)", theme.PURPLE),
+            ("motor_temp_f", "Motor temp (°F)", theme.RED),
+            ("motor_amps", "Motor amps (A)", theme.GREEN),
+            ("current_imbalance_pct", "Current imbalance (%)", theme.AMBER)],
+    "Rod pump": [("runtime_pct", "Runtime (%)", theme.GREEN),
+                 ("motor_amps", "Motor load (A)", theme.AMBER)],
+    # Flowing wells have no downhole pump; downhole pressure is the one diagnostic
+    # the synthetic SCADA carries (the production streams do the rest of the review).
+    "Flowing": [("intake_pressure_psi", "Downhole pressure (psi)", theme.PURPLE)],
+}
 
 # ---- global session-state contract ------------------------------------------
 # app.py seeds these before navigation runs; views call ensure_state() too so

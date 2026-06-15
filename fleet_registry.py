@@ -68,14 +68,15 @@ _HERO: dict[str, WellMeta] = {
     "well_008": WellMeta(
         "well_008", "Loving 8H", "Delaware", "Loving Co., TX", "Avalon",
         "ESP", "42-301-30008", "2023-01", "Delaware · Avalon",
-        "ESP producer with rising intake pressure — an ESP-swap candidate across "
-        "the ESP model, PE Copilot, and AFE Copilot.", hero=True, lateral_length_ft=9600),
+        "ESP producer in downthrust — sliding gross fluid and falling runtime "
+        "(pump operating below its range) — an ESP-swap candidate across the ESP "
+        "model, PE Copilot, and AFE Copilot.", hero=True, lateral_length_ft=9600),
     "well_013": WellMeta(
         "well_013", "Martin 13H", "Midland", "Martin Co., TX", "Wolfcamp A",
-        "ESP", "42-317-30013", "2023-04", "Midland · Wolfcamp A",
-        "Gas-interference ESP well — the Fleet Triage Board's top risked-NPV "
-        "opportunity (gas-lift-optimization candidate) and the pipeline's flagship.",
-        hero=True, lateral_length_ft=10200),
+        "Gas lift", "42-317-30013", "2023-04", "Midland · Wolfcamp A",
+        "Gas-lift well with gas interference / unstable lift — the Fleet Triage "
+        "Board's top risked-NPV opportunity (gas-lift-optimization candidate) and "
+        "the pipeline's flagship.", hero=True, lateral_length_ft=10200),
     "well_022": WellMeta(
         "well_022", "Reeves 22H", "Delaware", "Reeves Co., TX", "Bone Spring (3rd)",
         "ESP", "42-389-30022", "2022-11", "Delaware · Bone Spring",
@@ -137,12 +138,26 @@ def hero_wells() -> list[WellMeta]:
 
 
 # --- synthetic intervention / workover history (deterministic, additive) -------
-_WORKOVER_TYPES = [
-    ("ESP swap", 523_000), ("Acid stimulation", 274_000),
-    ("Gas-lift optimization", 27_000), ("Rod-pump workover", 84_000),
-    ("Scale treatment", 274_000), ("Tubing repair", 96_000),
-    ("Recompletion", 410_000),
-]
+# Each workover: (all-in cost $, plausible uplift band bopd). Uplift bands are sized
+# so realized $/bopd lands in a defensible ~$2k–8k band (a big ESP swap restores far
+# more rate than a gas-lift tweak) instead of the RNG that gave $35k/bopd ESP swaps.
+_WORKOVERS: dict[str, tuple[int, int, int]] = {
+    "ESP swap":              (523_000, 80, 180),
+    "Recompletion":          (410_000, 60, 160),
+    "Acid stimulation":      (274_000, 40, 110),
+    "Scale treatment":       (274_000, 35,  90),
+    "Tubing repair":         ( 96_000, 10,  35),
+    "Rod-pump workover":     ( 84_000, 12,  40),
+    "Gas-lift optimization": ( 27_000,  8,  30),
+}
+# Only jobs that physically apply to each lift type (you can't run an ESP swap on a
+# rod-pumped or flowing well, or optimize gas lift on a well with no injection).
+_LIFT_WORKOVERS: dict[str, list[str]] = {
+    "ESP":      ["ESP swap", "Scale treatment", "Acid stimulation", "Tubing repair"],
+    "Rod pump": ["Rod-pump workover", "Tubing repair", "Acid stimulation"],
+    "Gas lift": ["Gas-lift optimization", "Acid stimulation", "Recompletion"],
+    "Flowing":  ["Acid stimulation", "Recompletion", "Tubing repair"],
+}
 
 
 def well_history(well_id: str, as_of: str = "2026-05-29") -> dict:
@@ -166,14 +181,16 @@ def well_history(well_id: str, as_of: str = "2026-05-29") -> dict:
     # Hero wells carry a richer history; everyone gets 0–3 prior jobs.
     n_jobs = (2 if meta.hero else 0) + rng.randint(0, 2)
     n_jobs = min(n_jobs, max(0, months_online // 6))
+    candidates = _LIFT_WORKOVERS.get(meta.lift, list(_WORKOVERS))
     records = []
     for _i in range(n_jobs):
         mo = rng.randint(2, max(3, months_online - 1))
         yy = fy + (fm - 1 + mo) // 12
         mm = (fm - 1 + mo) % 12 + 1
-        kind, base = rng.choice(_WORKOVER_TYPES)
+        kind = rng.choice(candidates)               # only jobs valid for this lift
+        base, ulo, uhi = _WORKOVERS[kind]
         cost = int(base * rng.uniform(0.85, 1.2))
-        uplift = rng.randint(15, 120)
+        uplift = rng.randint(ulo, uhi)              # uplift scaled to the job's size
         records.append({"date": date(yy, mm, 1).isoformat(), "type": kind,
                         "cost_usd": cost, "uplift_bopd": uplift,
                         "result": "restored to type curve" if rng.random() > 0.3
