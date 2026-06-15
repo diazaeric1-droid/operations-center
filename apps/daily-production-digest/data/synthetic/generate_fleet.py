@@ -322,7 +322,10 @@ _SIG_PLAN = [
     ("shut_in",          sig_shut_in,          "any",      4),
     ("rate_loss",        sig_rate_loss,        "base",     6),
 ]
-UNDERINJECT = {21, 70}   # gas-lift wells that lose injection (gas-lift opportunity)
+UNDERINJECT: set = set()   # retired: the gas-lift fault now shows on the displayed
+# injection/casing channels of the gas_interference / gas_lock wells themselves
+# (see _GASLIFT_SYMPTOM below), so no separate "loses injection but no rate loss"
+# well exists to read as a textbook problem the console fails to flag.
 DECOYS = {
     96: decoy_subthreshold_dip,
     97: decoy_steep_decliner,
@@ -359,6 +362,14 @@ def _assign_signatures() -> dict:
 
 
 SIGNATURES = _assign_signatures()
+
+# Gas-lift wells whose fault must show on the DISPLAYED gas-lift channels (injection
+# falls, casing builds) so the shown evidence matches the gas-interference / gas-lock
+# diagnosis and the "restore injection to recover rate" recommendation. Without this,
+# the well's oil collapses while its visible lift channels sit still (the real driver,
+# an intake-pressure collapse, is an ESP channel not shown on a gas-lift well) — a
+# self-contradiction a gas-lift PE catches instantly.
+_GASLIFT_SYMPTOM = set(SIGNATURES["gas_interference"][0]) | set(SIGNATURES["gas_lock"][0])
 
 # Rate-affected modes also get a RECENT acute oil drop so the digest's trailing-day
 # detector quantifies a real deferred rate (the 30-day diagnostic signature drives
@@ -411,7 +422,7 @@ def main():
         if i in _RATE_DROP_WELLS:
             df = _recent_oil_drop(df, _RATE_DROP_WELLS[i], seed=i)
         df = _add_gas(df, i)                                   # gas AFTER oil edits
-        df = _add_gaslift(df, i, underinject=(i in UNDERINJECT))
+        df = _add_gaslift(df, i, underinject=(i in _GASLIFT_SYMPTOM))
         for c in ("bopd", "bfpd", "intake_pressure_psi", "motor_temp_f",
                   "motor_amps", "runtime_pct", "current_imbalance_pct",
                   "drive_freq_hz"):
@@ -438,8 +449,8 @@ def main():
     seeded = sum(len(nums) for nums, _ in SIGNATURES.values())
     print(f"Wrote {N_WELLS} wells × {N_DAYS} days to {OUT} "
           f"({seeded} seeded signatures across {len(SIGNATURES)} modes, "
-          f"{len(UNDERINJECT)} gas-lift under-injection, {len(DECOYS)} decoys; "
-          f"ground_truth.csv written)")
+          f"{len(_GASLIFT_SYMPTOM)} gas-lift wells show the injection symptom, "
+          f"{len(DECOYS)} decoys; ground_truth.csv written)")
 
 
 if __name__ == "__main__":

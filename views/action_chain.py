@@ -28,12 +28,6 @@ def _sync_ac_flagged() -> None:
         st.session_state["well_id"] = v
 
 
-def _approver(cost: float) -> str:
-    if cost < 100_000:
-        return "Field Superintendent"
-    if cost < 500_000:
-        return "Asset Manager"
-    return "Asset VP / Partner AFE"
 
 
 def render() -> None:
@@ -152,8 +146,9 @@ def render() -> None:
     mode_short = mode_full.split("—")[0].strip() or "—"
     m1, m2, m3 = st.columns(3)
     m1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
-              help="Platt-calibrated probability from the ESP model trained on this "
-                   "fleet's labeled faults (out-of-fold AUROC ≈0.99; model card on "
+              help=f"Platt-calibrated probability from the "
+                   f"{'ESP' if meta.lift == 'ESP' else 'failure-risk'} model trained on "
+                   "this fleet's labeled faults (out-of-fold AUROC ≈0.99; model card on "
                    "Methods & Limitations).")
     m2.metric("Suspected Mode", mode_short, help=mode_full)
     m3.metric("Intervention", diag["intervention"].replace("_", " "))
@@ -180,8 +175,10 @@ def render() -> None:
                    "This is BELOW the AFE's deterministic Net NPV below (which is not "
                    "risk-weighted) — that gap is the failure-risk discount, not a "
                    "discrepancy.")
-    a4.metric("Routes To", "—" if pd.isna(cost) else _approver(cost),
-              help="Authority-limit approval routing by AFE size.")
+    a4.metric("Routes To",
+              "—" if pd.isna(cost) else core.afe_tracker.required_approver(float(cost)),
+              help="Authority-limit approval routing by AFE size — the SAME schedule "
+                   "the AFE document below uses (one source of truth).")
     if npv <= 0 and rec_int != "no_action":
         st.warning("Per the verdict above, this AFE is generated to show what the "
                    "chain WOULD authorize — it is **not** recommended for approval "
@@ -217,9 +214,10 @@ def render() -> None:
         _tornado_chart(mc)
         theme.source_note(
             f"{mc['n_trials']:,} trials, net-to-operator at the deck price/NRI (PV10). "
-            "The P50 reconciles with the AFE's deterministic Net NPV above; the tornado "
-            "shows each variable's NPV swing when moved to its P10/P90 with the others "
-            "held at base — where the risk to this AFE actually lives.")
+            "The **base case** (mean of the inputs) equals the AFE's deterministic Net "
+            "NPV above; the P50 sits slightly below it because the NPV distribution is "
+            "right-skewed. The tornado shows each variable's NPV swing when moved to its "
+            "P10/P90 with the others held at base — where the risk to this AFE lives.")
 
     theme.source_note(
         "Engineering math is deterministic at every hop; economics use the deck oil "

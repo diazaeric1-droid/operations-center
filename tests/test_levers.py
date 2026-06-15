@@ -35,6 +35,40 @@ def test_afe_monte_carlo_reconciles_and_is_ordered(bootstrapped):
 
 # ---- economic limit is sane --------------------------------------------------
 
+def test_economic_limit_guards_down_wells(bootstrapped):
+    """A reserves read on a currently-shut-in well is meaningless — economic_limit must
+    return status='down', not an absurd remaining-life off the pre-outage rate."""
+    import pandas as pd
+    gt = pd.read_csv(core.DIGEST_FLEET.parent / "ground_truth.csv")
+    shut = str(gt[gt["seeded_mode"] == "shut_in"]["well_id"].iloc[0])
+    el = core.economic_limit(core.well_scada(core.alert_for(shut, price_per_bbl=PRICE)),
+                             realized_price=PRICE, net_revenue_interest=NRI)
+    assert el is not None and el.get("status") == "down"
+
+
+def test_gaslift_fault_shows_on_displayed_channels(bootstrapped):
+    """A gas-lift well with a gas-interference/lock fault must show the symptom on its
+    DISPLAYED channels (injection falls) so the shown evidence matches the diagnosis —
+    not only on the hidden intake channel (the flagship-well contradiction)."""
+    import numpy as np
+    import pandas as pd
+
+    import fleet_registry as fr
+    gt = pd.read_csv(core.DIGEST_FLEET.parent / "ground_truth.csv")
+    gas = [str(w) for w in gt[gt["seeded_mode"].isin(["gas_interference", "gas_lock"])]["well_id"]]
+    checked = 0
+    for w in gas:
+        if fr.get(w).lift != "Gas lift":
+            continue
+        d = pd.read_csv(core.DIGEST_FLEET / f"{w}.csv")
+        oil = d["bopd"].to_numpy(dtype=float)
+        inj = d["gas_inj_mcfd"].to_numpy(dtype=float)
+        assert oil[-1] < oil[-31] * 0.92            # oil fell over the window
+        assert inj[-1] < inj[-31] * 0.92            # AND the DISPLAYED injection fell
+        checked += 1
+    assert checked >= 5
+
+
 def test_economic_limit_is_sane(bootstrapped):
     _wid, _diag, scada = _top_diag()
     el = core.economic_limit(scada, realized_price=PRICE, net_revenue_interest=NRI)

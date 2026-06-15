@@ -4,6 +4,47 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-06-15
+
+PE-scrutiny readiness pass — fixes the on-screen self-contradictions a 6-persona
+adversarial review (senior PE / reservoir / asset-manager / ML / skeptic / honesty)
+reproduced in the live app, the day before peer review.
+
+### Fixed — credibility (a sharp PE catches these in the first five minutes)
+- **Flagship gas-lift well's diagnosis now matches its displayed evidence.** A
+  gas-interference/gas-lock well's oil collapsed while its *shown* gas-lift channels
+  (injection, casing) sat still — the real driver (intake-pressure collapse) is an ESP
+  channel not displayed on a gas-lift well. The generator now drives the fault through
+  the **displayed** channels (injection falls ~40%, casing builds), so "falling
+  injection with rising casing → restore injection" reads true. (Retired the separate
+  under-injection wells that read as an unflagged textbook problem.)
+- **"ESP 30-day failure risk" + ESP-only field steps no longer shown on 61 non-ESP
+  wells.** The diagnosis wording and recommended field steps are now lift-aware (a
+  gas-lift / rod-pump / flowing well isn't told to "megger the motor" or that it has an
+  ESP). *(classify_failure_mode gains an optional `lift`; detection stays deterministic
+  and lift-agnostic, so the board / parity are unchanged.)*
+- **Economic-limit "remaining life" no longer absurd on down wells.** A shut-in well
+  used to read "296 BOPD now / 1.1 yr" (the 180-day fit read a 6-day outage as terminal
+  decline). It now returns a **"well currently down — restore first"** state, uses a
+  robust producing-day rate, and fits decline on the **same established-trend basis as
+  the type-curve overlay** — so the two decline numbers on Well 360 no longer disagree.
+- **One approval-routing schedule.** The Action Chain "Routes To" metric and the AFE
+  document used two different authority tables (Field Superintendent vs Production
+  Engineer for the same cost); both now call the AFE component's `required_approver`.
+
+### Fixed — wording / consistency
+- The Monte-Carlo caption now correctly says the **base case (mean)** reconciles with
+  the deterministic Net NPV, with the P50 slightly below it (right-skew) — it isn't the
+  P50 that reconciles.
+- Home's amber health bucket renamed **"Elevated Risk"** (with a clarifying caption) so
+  the word "Watch" doesn't read 0 on Home and 8 on the Triage Board's economic tier.
+- Removed a stale "ESP score is OOD here" code comment left over from before v0.7.0.
+
+### Tests
+- Regression guards: gas-lift faults show on displayed channels; economic-limit guards
+  down wells. 47 tests pass; `rank_fleet ≡ pipeline_core` parity holds (pe-pipeline
+  updated for the diagnosis wording).
+
 ## [0.7.0] — 2026-06-14
 
 ESP model recalibrated on the digest fleet.

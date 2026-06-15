@@ -112,13 +112,19 @@ def render() -> None:
                     f"{alert['headline']}")
 
     # ---- risk + recommended intervention ---------------------------------------
+    # The risk model is generic (ground-truth-trained), but the wording is named for
+    # the ESP demo; scope the "ESP" label to actual ESP wells so a gas-lift, rod-pump,
+    # or flowing well isn't told it has an ESP it doesn't have.
+    is_esp = meta.lift == "ESP"
+    scorer = "ESP agent" if is_esp else "failure-risk agent"
+    model_name = "ESP model" if is_esp else "failure-risk model"
     pt.section("Failure Risk & Recommended Intervention",
-               "The ESP agent scores the well's SCADA signature; the mode classifier "
-               "maps it to a priced intervention.")
+               f"The {scorer} scores the well's SCADA signature; the mode classifier "
+               "maps it to a lift-appropriate priced intervention.")
     diag = c.diagnosis(well_id, price)
     r1, r2, r3 = st.columns(3)
     r1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
-              help="A Platt-calibrated probability from the ESP model trained on this "
+              help=f"A Platt-calibrated probability from the {model_name} trained on this "
                    "fleet's labeled faults (out-of-fold AUROC ≈0.99 — high because the "
                    "synthetic signatures are cleanly separable, not a real-world claim). "
                    "Full model card on Methods & Limitations.")
@@ -136,6 +142,12 @@ def render() -> None:
                              net_revenue_interest=nri)
     if el is None:
         st.caption("Not enough producing history to estimate an economic limit.")
+    elif el.get("status") == "down":
+        st.warning("**Well is currently down / collapsed.** A reserves read is "
+                   "meaningless while it's offline — restore production first, then "
+                   "the economic limit recomputes off the recovered rate.")
+        st.caption(f"Net margin ${el['net_margin_per_bbl']:,.0f}/bbl · "
+                   f"recent producing rate ~{el['q_now_bopd']:,.0f} BOPD.")
     else:
         e1, e2, e3 = st.columns(3)
         e1.metric("Economic-limit rate", f"{el['q_limit_bopd']:,.0f} BOPD",
@@ -147,7 +159,8 @@ def render() -> None:
         e3.metric("Net margin", f"${el['net_margin_per_bbl']:,.0f}/bbl",
                   help="Realized price × NRI − variable opex.")
         st.caption(f"Assumes ${el['loe_per_month']:,.0f}/well-month fixed LOE and the "
-                   f"well's fitted decline ({el['annual_decline_pct']:,.0f}%/yr). "
+                   f"well's established-trend decline ({el['annual_decline_pct']:,.0f}%/yr) "
+                   "— the same decline the type-curve overlay above uses. "
                    "Illustrative carrying cost — set per asset in a real deployment.")
 
     # ---- well work history ------------------------------------------------------

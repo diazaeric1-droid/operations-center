@@ -207,7 +207,8 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
         '</div>', unsafe_allow_html=True)
     cols = st.columns(4)
     cols[0].metric("Healthy", f"{h['healthy']}", f"{h['pct_nominal']:.0f}% nominal")
-    cols[1].metric("On Watch", f"{h['watch']}", "elevated risk / DQ flag",
+    cols[1].metric("Elevated Risk", f"{h['watch']}",
+                   "highest-risk quartile / DQ flag" if h["watch"] else None,
                    delta_color="off")
     cols[2].metric("Impaired", f"{h['impaired']}",
                    f"{h['down']} down · {h['losing']} losing", delta_color="inverse")
@@ -217,15 +218,17 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
                  if not x.acknowledged and x.severity == "HIGH")
     st.markdown(
         pt.pill(f"{h['healthy']} healthy ({h['pct_nominal']:.0f}% nominal)", "ok")
-        + " " + pt.pill(f"{h['watch']} on watch", "warn" if h["watch"] else "ok")
+        + " " + pt.pill(f"{h['watch']} elevated risk", "warn" if h["watch"] else "ok")
         + " " + pt.pill(f"{h['impaired']} impaired", "bad" if h["impaired"] else "ok")
         + " " + pt.pill(f"{n_high} HIGH-severity alert{'s' if n_high != 1 else ''}",
                         "bad" if n_high else "ok"),
         unsafe_allow_html=True)
-    st.caption("Watch = the fleet's own highest-risk quartile by the ESP failure "
+    st.caption("Elevated Risk = the fleet's own highest-risk quartile by the failure "
                "signature (a Platt-calibrated probability from a model trained on this "
                "fleet's labeled faults; model card on Methods & Limitations) plus any "
-               "non-$ data-quality flag. All figures deterministic — no API key required.")
+               "non-$ data-quality flag. This is a HEALTH read — distinct from the "
+               "Triage Board's economic 'Watch' tier (a losing well an intervention "
+               "wouldn't pay for yet). All figures deterministic — no API key required.")
 
 
 def core_fleet_size() -> int:
