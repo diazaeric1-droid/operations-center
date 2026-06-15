@@ -4,6 +4,35 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-06-14
+
+The remaining audit levers + the minor leftovers.
+
+### Added
+- **Per-well type-curve overlay.** Well 360 and the Surveillance per-well drill-down
+  now draw each well's own fitted exponential decline over its oil — the "is this well
+  on its type curve, or deferring?" read that previously existed only at the fleet
+  level (`core.fit_well_decline`).
+- **"What changed since yesterday" on Home.** "What Broke Overnight" is now a true
+  day-over-day **diff** off the event state machine — NEW / STILL-ONGOING / RESOLVED
+  groups (with what's down right now) — instead of a stateless re-list of today's scan.
+- **Fleet map on Surveillance.** A geospatial view coloured green/amber/red by live
+  health tier (`core.well_tiers`). Each well is placed at its real Permian county's
+  centroid with a deterministic within-county jitter (synthetic coordinates, disclosed).
+- **Methods & Limitations page** (Data section). A model card consolidating the
+  economics conventions, the ESP fleet-relative-not-calibrated disclosure, the
+  lift-aware rule, the two-datasets provenance, and the committed backtest numbers —
+  the page a sharp reviewer looks for, instead of scattered fine-print captions.
+
+### Changed
+- Dependencies: `scipy` now explicitly pinned (`>=1.13,<2`) instead of floating as a
+  transitive dep, so the whole numeric stack is bounded for reproducible deploys.
+
+### Tests
+- New coverage: per-well decline fit alignment, the map's per-well health tiers, and a
+  guard that the shipped ESP model carries a fitted Platt calibrator (audit #25 — a
+  silent fall-through to uncalibrated probabilities now fails CI). 44 tests pass.
+
 ## [0.5.0] — 2026-06-14
 
 Lift-aware intervention engine (the deferred audit lever, completed).

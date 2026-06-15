@@ -16,7 +16,7 @@ EXPECTED_NAV = {
     "Loss Accounting": ["Deferment Overview", "Causes & Pareto",
                         "Recovery Work Queue"],
     "Well File": ["Well 360", "Action Chain"],
-    "Data": ["Sources & BYOD"],
+    "Data": ["Sources & BYOD", "Methods & Limitations"],
 }
 
 ALL_TITLES = [t for ts in EXPECTED_NAV.values() for t in ts]

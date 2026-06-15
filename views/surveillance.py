@@ -31,6 +31,59 @@ def _sync_surv_well() -> None:
     st.session_state["well_id"] = st.session_state["surv_well"]
 
 
+# Approximate centroids of the Permian counties the fleet registry uses, so the map
+# is geographically honest at the county level (per-well coordinates are synthetic
+# jitter within the county — the registry carries no real lat/long).
+_COUNTY_LATLON = {
+    "Martin": (32.30, -101.95), "Midland": (31.87, -102.03),
+    "Howard": (32.31, -101.44), "Glasscock": (31.87, -101.52),
+    "Reeves": (31.42, -103.69), "Loving": (31.85, -103.58),
+    "Ward": (31.51, -103.10), "Culberson": (31.44, -104.52),
+}
+_TIER_COLOR = {"down": "#b42318", "watch": "#d9a015", "healthy": "#1b7a3d"}
+
+
+def _well_latlon(well_id: str, area: str) -> tuple[float, float]:
+    """Deterministic synthetic lat/long: county centroid + a stable jitter seeded off
+    the well number (≈ within-county spread). Synthetic by design."""
+    county = area.split(" Co.")[0].strip()
+    lat0, lon0 = _COUNTY_LATLON.get(county, (31.8, -102.5))
+    rng = np.random.default_rng(fleet_registry._suffix(well_id) * 2654435761 % (2 ** 32))
+    return lat0 + float(rng.uniform(-0.13, 0.13)), lon0 + float(rng.uniform(-0.16, 0.16))
+
+
+def _fleet_map(fleet: dict, price: float) -> None:
+    """Tier-colored map of the fleet (Spotfire/OFM/Avocet all open on a map). Coloured
+    green / amber / red by live health tier."""
+    import core
+    board = c.board_with_deferred(price, st.session_state.get("nri", 0.80))
+    tiers = core.well_tiers(fleet, board)
+    rows = []
+    for wid in fleet:
+        meta = fleet_registry.get(str(wid))
+        lat, lon = _well_latlon(str(wid), meta.area)
+        tier = tiers.get(str(wid), "healthy")
+        rows.append({"lat": lat, "lon": lon, "color": _TIER_COLOR[tier],
+                     "size": 220 if tier == "down" else (150 if tier == "watch" else 90)})
+    mdf = pd.DataFrame(rows)
+    n = {"down": 0, "watch": 0, "healthy": 0}
+    for w in fleet:
+        n[tiers.get(str(w), "healthy")] += 1
+    st.markdown(
+        pt.pill(f"{n['healthy']} healthy", "ok") + " "
+        + pt.pill(f"{n['watch']} watch", "warn" if n["watch"] else "ok") + " "
+        + pt.pill(f"{n['down']} down", "bad" if n["down"] else "ok"),
+        unsafe_allow_html=True)
+    try:
+        st.map(mdf, latitude="lat", longitude="lon", color="color", size="size")
+    except Exception:  # noqa: BLE001 — older streamlit map signature
+        st.map(mdf[["lat", "lon"]])
+    theme.source_note(
+        "Well locations are SYNTHETIC — each well's real Permian county (from the fleet "
+        "registry) placed at the county centroid with a deterministic within-county "
+        "jitter. Colour is the live health tier (green healthy / amber watch / red down).")
+
+
 def render() -> None:
     c.ensure_state()
     price, _nri, _disc = c.deck()
@@ -91,6 +144,12 @@ def render() -> None:
                "Fleet oil against its own exponential-decline fit — are we holding "
                "the expected decline, or losing barrels to downtime / underperformance?")
     _typecurve_chart(ff)
+
+    st.divider()
+    pt.section("Fleet Map — Health by Location",
+               "Where the fleet is and how it's doing — the spatial view every "
+               "surveillance tool opens on, coloured by live health tier.")
+    _fleet_map(fleet, price)
 
     st.divider()
     pt.section("Per-Well Surveillance",
@@ -203,6 +262,7 @@ def _well_charts(df, meta, win: int) -> None:
     if df is None or not len(df):
         pt.empty_state("No SCADA for this well.")
         return
+    import core
     d = df.tail(win).copy()
     d["water"] = (d["bfpd"] - d["bopd"]).clip(lower=0)
 
@@ -218,6 +278,15 @@ def _well_charts(df, meta, win: int) -> None:
     for i, (col, _lbl, clr) in enumerate(rows, start=1):
         fig.add_trace(go.Scatter(x=d["date"], y=d[col], line=dict(color=clr, width=1.4)),
                       row=i, col=1)
+        # Per-well expected decline on the oil panel (fit on the FULL history, drawn
+        # over the visible window) — is this well on its type curve, or deferring?
+        if col == "bopd":
+            fit = core.fit_well_decline(df)
+            if fit is not None:
+                exp = list(fit["expected"])[-len(d):]
+                fig.add_trace(go.Scatter(x=d["date"], y=exp, name="Expected decline",
+                              line=dict(color=theme.RED, width=1.2, dash="dash")),
+                              row=i, col=1)
     fig.update_layout(showlegend=False)
     for ann in fig["layout"]["annotations"]:
         ann["x"], ann["xanchor"], ann["font"] = 0.0, "left", dict(size=11)

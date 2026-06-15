@@ -81,6 +81,29 @@ def test_interventions_are_lift_appropriate(bootstrapped):
             assert lift == "ESP"
 
 
+def test_fit_well_decline_aligns_and_is_sane(bootstrapped):
+    _wid, _diag, scada = _top_diag()
+    fit = core.fit_well_decline(scada)
+    assert fit is not None
+    assert len(fit["expected"]) == len(scada)          # aligned to the full history
+    assert fit["implied_deferment_bopd"] >= 0.0
+
+
+def test_well_tiers_cover_the_fleet(bootstrapped):
+    fleet = core.load_scada_fleet()
+    board = core.rank_fleet(price_per_bbl=PRICE, net_revenue_interest=NRI)
+    tiers = core.well_tiers(fleet, board)
+    assert len(tiers) == len(fleet)
+    assert set(tiers.values()) <= {"down", "watch", "healthy"}
+
+
+def test_esp_model_ships_calibrated(bootstrapped):
+    # Audit #25: a silent calibration fall-through (to raw, uncalibrated probabilities)
+    # must be catchable — the shipped model must carry a fitted Platt calibrator.
+    m = core.esp_model.ESPRiskModel.load(str(core.ESP_MODEL))
+    assert m.calibrator is not None
+
+
 def test_triage_scorecard_is_honest(bootstrapped):
     board = core.rank_fleet(price_per_bbl=PRICE, net_revenue_interest=NRI)
     sc = core.triage_scorecard(board)

@@ -238,6 +238,15 @@ def _trend_chart(scada, meta, alert) -> None:
     for i, (col, _lbl, clr) in enumerate(rows, start=1):
         fig.add_trace(go.Scatter(x=d["date"], y=d[col], line=dict(color=clr, width=1.4)),
                       row=i, col=1)
+        # Overlay the well's own expected exponential decline on the oil panel — the
+        # "on the type curve, or deferring?" read (the gap below = implied deferment).
+        if col == "bopd":
+            import core
+            fit = core.fit_well_decline(d)
+            if fit is not None:
+                fig.add_trace(go.Scatter(
+                    x=fit["dates"], y=fit["expected"], name="Expected decline",
+                    line=dict(color=theme.RED, width=1.2, dash="dash")), row=i, col=1)
     if alert is not None and alert.get("date"):
         ts = pd.Timestamp(alert["date"])
         for i in range(1, len(rows) + 1):
