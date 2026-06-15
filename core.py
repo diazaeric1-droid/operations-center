@@ -140,12 +140,17 @@ def ensure_digest_data(log=print) -> None:
     existing = sorted(DIGEST_FLEET.glob("well_*.csv"))
     expected = _expected_fleet_size()
     stale = bool(expected) and len(existing) != expected
-    if not existing or stale:
+    # Also regenerate if the ranking-scorecard ground truth is missing (an existing
+    # checkout / warm container can have the right well count but predate it).
+    gt_missing = bool(existing) and not (DIGEST_FLEET.parent / "ground_truth.csv").exists()
+    if not existing or stale or gt_missing:
         if stale:
             log(f"SCADA fleet is stale ({len(existing)} wells on disk; generator "
                 f"declares {expected}) — regenerating…")
             for p in existing:
                 p.unlink()
+        elif gt_missing:
+            log("SCADA fleet present but ground_truth.csv missing — regenerating…")
         else:
             log("Generating synthetic SCADA fleet (digest)…")
         runpy.run_path(str(APP_DIRS["digest"] / "data" / "synthetic" / "generate_fleet.py"),
@@ -504,6 +509,108 @@ def render_afe(diag: dict, working_interest: float = 1.0,
     return afe_handoff.render_afe_markdown(
         diag, working_interest=working_interest,
         net_revenue_interest=net_revenue_interest, realized_price=realized_price)
+
+
+def afe_monte_carlo(diag: dict, realized_price: float = 70.0,
+                    net_revenue_interest: float = 0.80,
+                    n_trials: int = 10_000) -> dict | None:
+    """Monte-Carlo NPV for the AFE's recommended intervention — the distributional
+    view (P10/P50/P90 + probability-of-payout + a tornado) a capital review expects at
+    sign-off instead of a single point. Reuses the AFE component's ``simulate_economics``
+    engine; the gross results are netted to the operator (cost is certain at WI 1.0, so
+    ``net(x) = NRI·(x+cost) − cost`` is exact on every percentile) which makes the
+    net base NPV equal the AFE's deterministic Net NPV. Returns None if unpriced."""
+    try:
+        cost = float(afe_cost_db.cost_rollup(diag["intervention"])["total"])
+    except Exception:  # noqa: BLE001
+        return None
+    mc = afe_economics.simulate_economics(
+        cost, float(diag.get("incremental_rate_bopd", 0.0) or 0.0),
+        uplift_decline_per_yr=float(diag.get("expected_uplift_decline_per_yr", 0.6)),
+        realized_price_per_bbl=realized_price, n_trials=n_trials)
+    nri = net_revenue_interest
+
+    def _net(x: float) -> float:
+        return nri * (x + cost) - cost
+
+    return {
+        "cost": cost, "n_trials": int(mc.n_trials),
+        "p10": _net(mc.npv_p10_usd), "p50": _net(mc.npv_p50_usd),
+        "p90": _net(mc.npv_p90_usd), "mean": _net(mc.npv_mean_usd),
+        "base": _net(mc.base_npv_usd), "prob_payout": float(mc.probability_of_payout),
+        "tornado": {k: {"low": _net(v["low"]), "high": _net(v["high"]),
+                        "swing": nri * v["swing"]} for k, v in mc.tornado.items()},
+    }
+
+
+# Illustrative fixed lease operating expense per producing well-month (the carrying
+# cost the economic-limit calc compares net revenue against). Stated, not hidden.
+ECONOMIC_LIMIT_LOE_PER_MONTH = 9_000.0
+
+
+def economic_limit(scada, realized_price: float = 70.0,
+                   net_revenue_interest: float = 0.80, opex_per_bbl: float = 12.0,
+                   loe_per_month: float = ECONOMIC_LIMIT_LOE_PER_MONTH) -> dict | None:
+    """Economic limit + remaining producing life for a well: the oil rate at which net
+    revenue equals fixed lease operating expense (the rate you'd P&A at), and the months
+    from today's rate — declining at the well's own fitted exponential rate — to reach
+    it. The number a PE defends in a reserves/abandonment review. None if not estimable."""
+    import numpy as np
+    try:
+        oil = np.asarray(scada["bopd"], dtype=float)
+    except Exception:  # noqa: BLE001
+        return None
+    oil = oil[np.isfinite(oil) & (oil > 0)]
+    if len(oil) < 30:
+        return None
+    margin = realized_price * net_revenue_interest - opex_per_bbl   # net $/bbl
+    if margin <= 0:
+        return None
+    q_limit = loe_per_month / (margin * 30.4)                       # bopd at the limit
+    q_now = float(np.mean(oil[-30:]))
+    t = np.arange(len(oil), dtype=float)
+    fit_n = min(len(oil), 180)
+    Di = float(np.polyfit(t[-fit_n:], np.log(oil[-fit_n:]), 1)[0])  # 1/day, <0 for a decliner
+    d_monthly = -Di * 30.4
+    if q_now <= q_limit:
+        months = 0.0
+    elif d_monthly <= 0:
+        months = float("inf")                                       # flat/rising: no limit in sight
+    else:
+        months = float(np.log(q_now / q_limit) / d_monthly)
+    return {"q_limit_bopd": q_limit, "q_now_bopd": q_now, "months_remaining": months,
+            "net_margin_per_bbl": margin, "loe_per_month": loe_per_month,
+            "annual_decline_pct": float((1 - np.exp(Di * 365)) * 100)}
+
+
+def triage_scorecard(board) -> dict | None:
+    """Score the Triage Board's RANKING against the fleet's known seeded faults —
+    precision@k and lift-over-random — so the headline ranking carries a backtest like
+    the digest's event detector and the deferment classifier already do. Ground truth is
+    the generator's per-well signature assignment (``ground_truth.csv``); the ESP
+    component's ``labels.csv`` is for a different fleet and does not join here."""
+    import pandas as pd
+    gt_path = APP_DIRS["digest"] / "data" / "synthetic" / "ground_truth.csv"
+    if board is None or getattr(board, "empty", True) or not gt_path.exists():
+        return None
+    gt = pd.read_csv(gt_path)
+    truth = {str(w): int(i) for w, i in zip(gt["well_id"], gt["impaired"])}
+    n, n_pos = len(board), int(sum(truth.values()))
+    if not n or not n_pos:
+        return None
+    ranked = (board.sort_values("opportunity_score", ascending=False)["well_id"]
+              .astype(str).tolist())
+    base_rate = n_pos / n
+    at_k = {}
+    for k in (5, 10, 20):
+        kk = min(k, n)
+        hits = sum(truth.get(w, 0) for w in ranked[:kk])
+        prec = hits / kk
+        at_k[k] = {"precision": prec, "hits": hits,
+                   "lift": (prec / base_rate) if base_rate else 0.0}
+    recall = sum(truth.get(w, 0) for w in ranked[:n_pos]) / n_pos
+    return {"n_wells": n, "n_impaired": n_pos, "base_rate": base_rate,
+            "at_k": at_k, "recall_at_n_impaired": recall}
 
 
 def well_scada(alert_or_csv) -> "object":

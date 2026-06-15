@@ -196,11 +196,64 @@ def render() -> None:
                "failure signal and nets the certain cost, so Risked NPV ≤ Net NPV "
                "on the same well.")
     c.pinned_pv10_caption()
+
+    # ---- Monte-Carlo economics: the distributional view a capital review expects ---
+    pt.section("Monte-Carlo Economics — P10 / P50 / P90",
+               "A single-point NPV reads junior at sign-off. This runs 10,000 trials "
+               "over the three biggest uncertainties (incremental rate, uplift decline, "
+               "realized price) to show the band and the chance the job pays out.")
+    mc = core.afe_monte_carlo(diag, realized_price=price, net_revenue_interest=nri)
+    if mc is None:
+        st.caption("Monte-Carlo economics need a priced intervention — not available "
+                   "for this well's recommendation.")
+    else:
+        mcs = st.columns(4)
+        mcs[0].metric("P10 (downside)", f"${mc['p10']:,.0f}")
+        mcs[1].metric("P50 (median)", f"${mc['p50']:,.0f}")
+        mcs[2].metric("P90 (upside)", f"${mc['p90']:,.0f}")
+        mcs[3].metric("P(payout < 24 mo)", f"{mc['prob_payout']:.0%}")
+        _tornado_chart(mc)
+        theme.source_note(
+            f"{mc['n_trials']:,} trials, net-to-operator at the deck price/NRI (PV10). "
+            "The P50 reconciles with the AFE's deterministic Net NPV above; the tornado "
+            "shows each variable's NPV swing when moved to its P10/P90 with the others "
+            "held at base — where the risk to this AFE actually lives.")
+
     theme.source_note(
         "Engineering math is deterministic at every hop; economics use the deck oil "
         "price and NRI with working interest 1.0 (operator case) and the AFE "
         "component's PV10 convention. The LLM is optional and confined to narration.")
     theme.references(["npv", "shap"])
+
+
+_TORNADO_LABELS = {
+    "incremental_rate_bopd": "Incremental rate (±30%)",
+    "uplift_decline_per_yr": "Uplift decline (±0.15/yr)",
+    "realized_price_per_bbl": "Realized price (±1σ)",
+}
+
+
+def _tornado_chart(mc: dict) -> None:
+    """Horizontal tornado: each variable's NPV span (low→high) around the base NPV."""
+    import plotly.graph_objects as go
+
+    base = mc["base"]
+    items = sorted(mc["tornado"].items(), key=lambda kv: kv[1]["swing"])
+    fig = go.Figure()
+    for name, t in items:
+        lo, hi = sorted((t["low"], t["high"]))
+        fig.add_trace(go.Bar(
+            y=[_TORNADO_LABELS.get(name, name)], x=[hi - lo], base=lo,
+            orientation="h", marker_color=theme.BLUE,
+            hovertemplate=f"{_TORNADO_LABELS.get(name, name)}<br>"
+                          f"P10 NPV: ${lo:,.0f}<br>P90 NPV: ${hi:,.0f}"
+                          f"<br>swing: ${t['swing']:,.0f}<extra></extra>",
+            showlegend=False))
+    fig.add_vline(x=base, line_color=theme.NAVY, line_dash="dash", line_width=1.2)
+    fig.update_layout(xaxis_title="Net NPV ($, net to operator) — dashed line = base case",
+                      yaxis_title="", bargap=0.45)
+    st.plotly_chart(theme.style_fig(fig, height=70 * len(items) + 110, legend=False),
+                    width="stretch")
 
 
 def _top_opportunity(board) -> str | None:

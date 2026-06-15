@@ -418,10 +418,28 @@ def main():
             df[c] = df[c].round(1)
         df.to_csv(OUT / f"{name}.csv", index=False)
 
+    # Persist the GROUND TRUTH (which wells carry a real seeded fault) so the Triage
+    # Board's ranking can be scored honestly — precision@k / lift — on THIS fleet. The
+    # ESP component's labels.csv is for a different fleet and doesn't join here.
+    sig_of = {n: name for name, (nums, _fn) in SIGNATURES.items() for n in nums}
+    gt = ["well_id,seeded_mode,impaired"]
+    for i in range(1, N_WELLS + 1):
+        if i in sig_of:
+            mode, impaired = sig_of[i], 1
+        elif i in DECOYS:
+            mode, impaired = "decoy", 0
+        elif i in UNDERINJECT:
+            mode, impaired = "under_injection", 0
+        else:
+            mode, impaired = "healthy", 0
+        gt.append(f"well_{i:03d},{mode},{impaired}")
+    (OUT.parent / "ground_truth.csv").write_text("\n".join(gt) + "\n")
+
     seeded = sum(len(nums) for nums, _ in SIGNATURES.values())
     print(f"Wrote {N_WELLS} wells × {N_DAYS} days to {OUT} "
           f"({seeded} seeded signatures across {len(SIGNATURES)} modes, "
-          f"{len(UNDERINJECT)} gas-lift under-injection, {len(DECOYS)} decoys)")
+          f"{len(UNDERINJECT)} gas-lift under-injection, {len(DECOYS)} decoys; "
+          f"ground_truth.csv written)")
 
 
 if __name__ == "__main__":

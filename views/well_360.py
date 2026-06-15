@@ -125,6 +125,29 @@ def render() -> None:
     r3.metric("Recommended Intervention", diag["intervention"].replace("_", " "))
     st.caption(diag["primary_diagnosis"])
 
+    # ---- economic limit & remaining producing life -----------------------------
+    pt.section("Economic Limit & Remaining Life",
+               "The rate at which net revenue equals lease operating expense — the "
+               "rate you'd plug & abandon at — and how long this well's own decline "
+               "leaves before it gets there.")
+    el = core.economic_limit(core.well_scada(alert), realized_price=price,
+                             net_revenue_interest=nri)
+    if el is None:
+        st.caption("Not enough producing history to estimate an economic limit.")
+    else:
+        e1, e2, e3 = st.columns(3)
+        e1.metric("Economic-limit rate", f"{el['q_limit_bopd']:,.0f} BOPD",
+                  help="Net revenue = lease operating expense at this rate.")
+        months = el["months_remaining"]
+        e2.metric("Remaining life (est.)",
+                  "—" if months == float("inf") else f"{months / 12:,.1f} yr",
+                  f"{el['q_now_bopd']:,.0f} BOPD now", delta_color="off")
+        e3.metric("Net margin", f"${el['net_margin_per_bbl']:,.0f}/bbl",
+                  help="Realized price × NRI − variable opex.")
+        st.caption(f"Assumes ${el['loe_per_month']:,.0f}/well-month fixed LOE and the "
+                   f"well's fitted decline ({el['annual_decline_pct']:,.0f}%/yr). "
+                   "Illustrative carrying cost — set per asset in a real deployment.")
+
     # ---- well work history ------------------------------------------------------
     pt.section("Well History — Interventions",
                "How many times this well has been worked, and what was done — the "

@@ -15,6 +15,7 @@ build/
 # regenerated artifacts (bootstrap recreates all of these on first run —
 # mirrors the vendored components' own .gitignore data paths)
 apps/daily-production-digest/data/synthetic/fleet/
+apps/daily-production-digest/data/synthetic/ground_truth.csv
 apps/daily-production-digest/briefs/events.db
 apps/daily-production-digest/briefs/events.db-*
 apps/daily-production-digest/briefs/*.md
