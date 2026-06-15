@@ -4,6 +4,69 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-06-14
+
+PE-credibility audit fixes (multi-agent review of the whole console).
+
+### Fixed — correctness
+- **Action Chain rate/NPV reconciliation (blocker).** A non-flagged well's
+  synthesized alert carried `baseline_bopd = 0`, so its AFE uplift collapsed to the
+  20-bopd floor while the Triage Board used the real rate — the metric strip and the
+  AFE disagreed, and the risk-weighted NPV could exceed the un-risked AFE NPV (an
+  economic impossibility). `alert_for` now carries the well's real trailing-7-day
+  baseline, so the board and the AFE size the incremental rate identically.
+- **Risked-NPV labels corrected.** The Triage Board described the metric as
+  "net NPV × failure signal" but computes `risk × PV(net revenue) − cost`; the
+  context-bar and source-note now state the actual convention. The Action Chain's
+  "Risked NPV" metric is relabeled risk-weighted with a caption explaining why it is
+  below the AFE's deterministic Net NPV.
+- **Morning brief deferred-$ is net.** The vendored digest reports deferred $ gross;
+  the brief body (and the daily email) now net it by NRI to match the page KPI.
+- **ESP model-load failure is now visible.** A failed model load no longer silently
+  flattens the fleet to a uniform baseline risk — `risk_scoring_degraded()` drives a
+  banner on Home and the Triage Board, and the caught error is logged.
+
+### Fixed — domain realism (what a production engineer would catch)
+- **Workover history is lift-aware.** Well 360's intervention history no longer shows
+  physically-impossible jobs (an ESP swap on a rod-pumped well); each job is drawn
+  only from interventions valid for the well's lift type, and uplift is scaled to the
+  job size (defensible $/bopd instead of RNG).
+- **Gas-interference signatures only on gas-lift wells.** The generator seeds gas
+  interference / gas lock onto gas-lift wells (the flagship well_013 is now a gas-lift
+  well), so "gas-lift optimization" is never recommended for a well with no injection.
+  Each failure signature is seeded only on lift types it can physically occur on.
+- **Heterogeneous fleet.** Wells now span a realistic rate range (~35–950 bopd) with
+  per-well decline and water cut; gross fluid is derived from oil + water cut (was a
+  flat 220-bopd / 88%-WC clone ×100). Rate-loss divergences ramp gradually instead of
+  a rectangular step.
+- **Hero storylines match their data** (well_008 downthrust, well_013 gas-lift).
+
+### Fixed — consistency & infra
+- **Warm-container fleet self-heal actually fires.** `_artifacts_ready()` was satisfied
+  by the old 50-well CSVs, so the 50→100 regeneration never ran on a warm container;
+  it is now fleet-count-aware and clears caches after a regen.
+- Shared per-lift diagnostic-channel map (Surveillance and Well 360 can no longer
+  diverge); Surveillance type-curve annual-decline formula corrected; gas-lift
+  valve-vs-compressor note corrected; "Sources & BYOD" well count rendered
+  dynamically (was a stale "50"); stale "Colorado default" docstrings updated; Home
+  discloses when triage figures still reflect the synthetic fleet under a BYOD upload.
+- Sidebar header capitalized to **Well File**.
+- Dependencies bounded (`scikit-learn>=1.6,<1.10`, etc.) + `runtime.txt` pins Python
+  3.12 to match CI so the deployed env equals the tested one; daily-brief Action
+  passes `BRIEF_NRI` and gains `timeout-minutes` + a concurrency guard.
+
+### Tests
+- New coverage for the email renderer (`notify`), the 3-tier triage partition
+  invariant, and the production-divergence / net-$ convention. 36 tests pass; the
+  `rank_fleet ≡ pipeline_core` parity invariant still holds on the new fleet.
+
+### Known follow-up
+- The intervention *recommendation* on the board is still lift-agnostic for the
+  unclassified/default case (an OOD ESP score can still default a non-ESP well to
+  `esp_swap`). A lift-aware intervention engine is the right fix but requires a
+  coordinated `pipeline_core` change + opportunity-gating re-tune to keep the
+  opportunity count credible — tracked as a follow-up, not shipped here.
+
 ## [0.3.0] — 2026-06-14
 
 Realistic 100-well fleet + a new Surveillance page + Home/triage rework.

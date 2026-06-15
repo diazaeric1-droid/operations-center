@@ -120,17 +120,32 @@ def _flat_recent(arr: np.ndarray, win: int = WIN30) -> np.ndarray:
 
 
 def healthy_well(seed: int) -> pd.DataFrame:
-    """Stable well on a gentle base decline; diagnostics stationary + de-trended."""
+    """Stable well on a gentle base decline; diagnostics stationary + de-trended.
+
+    Each well gets its OWN initial rate, decline, and water cut (a real fleet spans
+    an order of magnitude in rate and a wide water-cut range — not one 220-bopd /
+    88%-WC clone ×100). Gross fluid is DERIVED from oil + water cut, so the two
+    curves move together (oil declines → gross declines) instead of an independent
+    draw that left gross fluid flat while oil fell."""
     rng = np.random.default_rng(seed)
     t = np.arange(N_DAYS)
-    decline = 0.9997 ** t  # ~11% over 400 days
-    bopd = np.clip(rng.normal(220, 8, N_DAYS) * decline, 80, 600)
+    # Per-well initial oil rate (lognormal): ~35–950 bopd spread across the fleet.
+    qi = float(np.clip(np.exp(rng.normal(np.log(170.0), 0.62)), 35.0, 950.0))
+    # Per-well exponential decline (~6–20% effective annual).
+    d_daily = float(rng.uniform(0.00018, 0.00060))
+    decline = np.exp(-d_daily * t)
+    bopd = np.clip(rng.normal(qi, qi * 0.035, N_DAYS) * decline, 5.0, 1600.0)
+    # Per-well water cut, drifting gently upward over life; gross fluid follows it.
+    wc0 = float(np.clip(rng.uniform(0.55, 0.92), 0.40, 0.96))
+    wc = np.clip(wc0 + np.linspace(0.0, float(rng.uniform(0.0, 0.05)), N_DAYS),
+                 0.30, 0.985)
+    bfpd = np.clip(bopd / (1.0 - wc), bopd + 5.0, 9000.0)
     amps = np.clip(rng.normal(60, 0.8, N_DAYS), 50, 72)
     imb = np.clip(rng.normal(2.2, 0.5, N_DAYS), 0.5, 5.0)
     df = pd.DataFrame({
         "date": DATES,
         "bopd": bopd,
-        "bfpd": np.clip(rng.normal(1800, 60, N_DAYS), 1200, 2800),
+        "bfpd": bfpd,
         "intake_pressure_psi": np.clip(rng.normal(120, 4, N_DAYS), 70, 200),
         "motor_temp_f": np.clip(rng.normal(290, 2, N_DAYS), 270, 320),
         "motor_amps": np.clip(_flat_recent(amps), 50, 72),
@@ -165,7 +180,7 @@ def sig_gas_lock(seed: int) -> pd.DataFrame:
     rng = np.random.default_rng(seed + 222)
     bfpd = df["bfpd"].to_numpy(copy=True)
     bfpd[-k:] = bfpd[-k:] * (1.0 + rng.normal(0, 0.22, k))    # CV well above 0.15
-    df["bfpd"] = np.clip(bfpd, 200, 3200)
+    df["bfpd"] = np.clip(bfpd, 20, None)
     rt = df["runtime_pct"].to_numpy(copy=True)
     low = rng.choice(np.arange(k), size=6, replace=False)
     rt[-k:][low] = rng.uniform(55, 70, len(low))             # several pump-off days
@@ -202,8 +217,8 @@ def sig_downthrust(seed: int) -> pd.DataFrame:
     df = healthy_well(seed)
     k = WIN30
     bfpd = df["bfpd"].to_numpy(copy=True)
-    bfpd[-k:] = bfpd[-k:] - np.linspace(0, 12 * k, k)        # ~ -12 bbl/d/d
-    df["bfpd"] = np.clip(bfpd, 200, 3200)
+    bfpd[-k:] = bfpd[-k:] * np.linspace(1.0, 0.82, k)        # ~18% gross-fluid fade
+    df["bfpd"] = np.clip(bfpd, 20, None)
     rt = df["runtime_pct"].to_numpy(copy=True)
     rt[-k:] = np.linspace(rt[-k], 93, k)
     df["runtime_pct"] = np.clip(rt, 60, 100)
@@ -239,15 +254,19 @@ def sig_shut_in(seed: int) -> pd.DataFrame:
 
 
 def sig_rate_loss(seed: int) -> pd.DataFrame:
-    """Sustained ~35% under-performance vs the decline-expected rate over ~20 days
-    — a production divergence (deferred barrels) without a single hard fault."""
+    """Production diverging GRADUALLY below the decline-expected rate over ~20 days
+    (down to ~35% below by the end) — a deferred-barrels divergence without a single
+    hard fault. A smooth ramp, not a rectangular step, because a real organic loss
+    accrues continuously (the rectangular 0.65 step read as a metering/allocation
+    artifact, not a decline divergence)."""
     df = healthy_well(seed)
     k = 20
+    ramp = np.linspace(1.0, 0.62, k)                 # widening gap below the curve
     oil = df["bopd"].to_numpy(copy=True)
-    oil[-k:] = oil[-k:] * 0.65
+    oil[-k:] = oil[-k:] * ramp
     df["bopd"] = oil
     bfpd = df["bfpd"].to_numpy(copy=True)
-    bfpd[-k:] = bfpd[-k:] * 0.9
+    bfpd[-k:] = bfpd[-k:] * np.linspace(1.0, 0.88, k)
     df["bfpd"] = bfpd
     return df
 
@@ -279,25 +298,67 @@ def decoy_borderline_intake(seed: int) -> pd.DataFrame:
     return df
 
 
-# ---- well → signature assignment ---------------------------------------------
-# Hero wells keep storylines consistent with the registry; the rest spread a
-# realistic mix across the 100-well fleet.
+# ---- well → signature assignment (LIFT-AWARE) --------------------------------
+# A failure mode is assigned only to wells whose ARTIFICIAL-LIFT TYPE it can
+# physically occur on, so the recommended intervention is never nonsensical (no
+# "gas-lift optimization" on an ESP well, no "ESP swap" on a flowing well):
+#   gas interference / gas lock  -> Gas-lift wells  -> gas_lift_optimization (cheap)
+#   scale / downthrust / electrical -> ESP wells    -> scale_tx / esp_swap
+#   shut-in                       -> any lift        -> well down
+#   rate-loss divergence          -> rod-pump/flowing -> lift-agnostic deferral
+# Hero wells are anchored to the signature their registry storyline describes.
+import random as _random
 
-SIGNATURES = {
-    "gas_interference": ([13, 15, 27, 33, 52, 61, 74, 88], sig_gas_interference),
-    "gas_lock":         ([19, 44, 66, 91], sig_gas_lock),
-    "scale":            ([11, 25, 38, 57, 72, 95], sig_scale),
-    "downthrust":       ([8, 41, 48, 53, 69, 83], sig_downthrust),
-    "electrical":       ([22, 36, 60, 77], sig_electrical),
-    "shut_in":          ([14, 31, 58, 84], sig_shut_in),
-    "rate_loss":        ([7, 29, 46, 63, 79, 92], sig_rate_loss),
-}
+_HERO_SIG = {7: "rate_loss", 8: "downthrust", 13: "gas_interference",
+             22: "electrical", 41: "downthrust", 48: "downthrust"}
+
+# (name, builder, lift pool the fault is valid on, target well count)
+_SIG_PLAN = [
+    ("gas_interference", sig_gas_interference, "Gas lift", 8),
+    ("gas_lock",         sig_gas_lock,         "Gas lift", 4),
+    ("scale",            sig_scale,            "ESP",      6),
+    ("downthrust",       sig_downthrust,       "ESP",      6),
+    ("electrical",       sig_electrical,       "ESP",      4),
+    ("shut_in",          sig_shut_in,          "any",      4),
+    ("rate_loss",        sig_rate_loss,        "base",     6),
+]
 UNDERINJECT = {21, 70}   # gas-lift wells that lose injection (gas-lift opportunity)
 DECOYS = {
     96: decoy_subthreshold_dip,
     97: decoy_steep_decliner,
     98: decoy_borderline_intake,
 }
+
+
+def _assign_signatures() -> dict:
+    """Deterministically map each signature to lift-appropriate wells (heroes first),
+    returning the same ``{name: (well_numbers, builder_fn)}`` shape the rest of the
+    module consumes. Stable across runs (fixed seed, sorted pools)."""
+    pools: dict = {}
+    for n in range(1, N_WELLS + 1):
+        pools.setdefault(_lift(n), []).append(n)
+    reserved = set(DECOYS) | set(UNDERINJECT)
+    nums: dict = {name: set() for name, _f, _l, _c in _SIG_PLAN}
+    for well, name in _HERO_SIG.items():
+        nums[name].add(well)
+        reserved.add(well)
+    rng = _random.Random(4242)
+    for name, _fn, lift_req, count in _SIG_PLAN:
+        if lift_req == "any":
+            pool = list(range(1, N_WELLS + 1))
+        elif lift_req == "base":         # lift-agnostic divergence: keep off gas-lift
+            pool = pools.get("Rod pump", []) + pools.get("Flowing", [])
+        else:
+            pool = list(pools.get(lift_req, []))
+        pool = sorted(n for n in pool if n not in reserved)
+        need = max(0, count - len(nums[name]))
+        chosen = rng.sample(pool, min(need, len(pool)))
+        reserved.update(chosen)
+        nums[name].update(chosen)
+    return {name: (sorted(nums[name]), fn) for name, fn, _l, _c in _SIG_PLAN}
+
+
+SIGNATURES = _assign_signatures()
 
 # Rate-affected modes also get a RECENT acute oil drop so the digest's trailing-day
 # detector quantifies a real deferred rate (the 30-day diagnostic signature drives
@@ -310,15 +371,21 @@ RATE_DROP_FRAC = {
 }
 
 
-def _recent_oil_drop(df: pd.DataFrame, frac: float) -> pd.DataFrame:
-    """Drop the latest day's oil to ``frac`` of the prior 7-day baseline (and pull
-    gross fluid down proportionally) so the rate-drop detector fires with a real
-    deferral."""
+def _recent_oil_drop(df: pd.DataFrame, frac: float, seed: int = 0) -> pd.DataFrame:
+    """Pull the last ~3 days of oil down toward ``frac`` of the prior 7-day baseline
+    (gross fluid proportionally) so the trailing-day rate-drop detector books a real
+    deferral. Spans a few noisy days, not one isolated point — a single half-rate day
+    on an otherwise-flat plateau reads as a bad allocation day, not a real event."""
     df = df.copy()
-    base = float(df["bopd"].iloc[-8:-1].mean())
-    df.loc[df.index[-1], "bopd"] = base * frac
-    bf_base = float(df["bfpd"].iloc[-8:-1].mean())
-    df.loc[df.index[-1], "bfpd"] = bf_base * (0.5 + 0.5 * frac)
+    rng = np.random.default_rng(seed + 31000)
+    d = 3
+    base = float(df["bopd"].iloc[-(d + 7):-d].mean())
+    bf_base = float(df["bfpd"].iloc[-(d + 7):-d].mean())
+    # Step toward the impaired rate over the last d days, with mild day-to-day noise.
+    steps = np.linspace((1.0 + frac) / 2.0, frac, d) * rng.normal(1.0, 0.03, d)
+    idx = df.index[-d:]
+    df.loc[idx, "bopd"] = base * steps
+    df.loc[idx, "bfpd"] = bf_base * (0.55 + 0.45 * steps)
     return df
 
 
@@ -342,7 +409,7 @@ def main():
         builder = _builder_for(i)
         df = builder(seed=i)
         if i in _RATE_DROP_WELLS:
-            df = _recent_oil_drop(df, _RATE_DROP_WELLS[i])
+            df = _recent_oil_drop(df, _RATE_DROP_WELLS[i], seed=i)
         df = _add_gas(df, i)                                   # gas AFTER oil edits
         df = _add_gaslift(df, i, underinject=(i in UNDERINJECT))
         for c in ("bopd", "bfpd", "intake_pressure_psi", "motor_temp_f",

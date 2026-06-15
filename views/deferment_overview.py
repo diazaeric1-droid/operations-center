@@ -1,6 +1,7 @@
 """Loss Accounting · Deferment Overview — potential vs actual, downtime vs
-underperformance. Ported from deferment-iq's demo (v0.5.1); defaults to REAL
-Colorado ECMC monthly records.
+underperformance. Ported from deferment-iq's demo (v0.5.1); defaults to the
+synthetic reason-coded monthly book (the real Colorado ECMC extract is a
+bring-your-own reference on Sources & BYOD, not the default).
 """
 from __future__ import annotations
 

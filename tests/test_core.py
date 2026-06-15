@@ -135,8 +135,8 @@ def test_get_alerts_matches_digest_handoff_directly(bootstrapped):
     assert mine[0]["well_id"] == direct[0]["well_id"]
     assert mine[0]["deferred_bopd"] == direct[0]["deferred_bopd"]
     # Known component values on the seeded 100-well fleet (generator is deterministic).
-    assert len(mine) == 8
-    assert mine[0]["well_id"] == "well_014"
+    assert len(mine) == 9
+    assert mine[0]["well_id"] == "well_029"
     assert mine[0]["deferred_bopd"] == 0.0
 
 

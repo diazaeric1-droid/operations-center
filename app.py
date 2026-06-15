@@ -57,6 +57,7 @@ def _artifacts_ready() -> bool:
     try:
         return (core.ESP_MODEL.exists()
                 and any(core.DIGEST_FLEET.glob("well_*.csv"))
+                and not core.digest_fleet_stale()      # 50→100 self-heal must fire
                 and any(core.DEFERMENT_WELLS.glob("well_*.csv")))
     except Exception:  # noqa: BLE001
         return False
@@ -68,6 +69,11 @@ if not _artifacts_ready():
                    expanded=False) as _status:
         try:
             core.bootstrap(log=_status.write)
+            # The fleet may have just been regenerated (e.g. a warm container that
+            # still held the old 50-well fleet). Drop cached well-id lists / fleet
+            # frames / rankings so every page serves the fresh fleet, not the cache.
+            st.cache_data.clear()
+            st.cache_resource.clear()
             _status.update(
                 label="Setup complete — fleet generated, ESP model trained.",
                 state="complete")

@@ -172,7 +172,12 @@ def render() -> None:
     a1, a2, a3, a4 = st.columns(4)
     a1.metric("Intervention", diag["intervention"].replace("_", " "))
     a2.metric("Est. AFE Cost", "—" if pd.isna(cost) else f"${cost:,.0f}")
-    a3.metric("Risked NPV", f"${npv:,.0f}" if npv >= 0 else f"−${abs(npv):,.0f}")
+    a3.metric("Risked NPV (risk-weighted)",
+              f"${npv:,.0f}" if npv >= 0 else f"−${abs(npv):,.0f}",
+              help="The board's risk-weighted NPV: risk × PV(net revenue) − cost. "
+                   "This is BELOW the AFE's deterministic Net NPV below (which is not "
+                   "risk-weighted) — that gap is the failure-risk discount, not a "
+                   "discrepancy.")
     a4.metric("Routes To", "—" if pd.isna(cost) else _approver(cost),
               help="Authority-limit approval routing by AFE size.")
     if npv <= 0 and rec_int != "no_action":
@@ -186,6 +191,10 @@ def render() -> None:
                        mime="text/markdown", type="primary")
     with st.expander("Full AFE document", expanded=npv > 0):
         st.markdown(afe_md)
+    st.caption("The AFE's **Net NPV** is deterministic (not risk-weighted); the "
+               "**Risked NPV** metric above multiplies the upside by the 30-day "
+               "failure signal and nets the certain cost, so Risked NPV ≤ Net NPV "
+               "on the same well.")
     c.pinned_pv10_caption()
     theme.source_note(
         "Engineering math is deterministic at every hop; economics use the deck oil "

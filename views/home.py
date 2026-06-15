@@ -55,6 +55,18 @@ def render() -> None:
                  "currently clears its cost — the fleet is being held, not worked."},
     ])
 
+    import core
+    if core.risk_scoring_degraded():
+        st.warning("⚠️ **ESP risk model unavailable** — fleet risk is showing the "
+                   f"baseline {core.BASELINE_RISK_30D:.0%}; the Top Opportunity / "
+                   "triage figures reflect deferred production only until the model "
+                   "is restored (re-run bootstrap).")
+    if token != c.DISK_TOKEN:
+        st.caption("Note: Open Alerts and Deferred $/day reflect **your uploaded "
+                   "fleet**, but Top Opportunity and the Triage Board still run on the "
+                   "synthetic demo fleet (the triage ranking isn't wired to BYOD yet) "
+                   "— so the 'authorize' step below may name a synthetic well.")
+
     _fleet_health(fleet, anomalies, b)
 
     _what_broke_and_next(anomalies, fleet, opportunities, price, nri)
