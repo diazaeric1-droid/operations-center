@@ -45,9 +45,34 @@ MODE_TO_INTERVENTION = [
 DEFAULT_INTERVENTION = ("esp_swap", 0.15)
 
 
-def _map_mode(mode: str) -> tuple[str, float]:
+def _map_mode(mode: str, lift: str | None = None) -> tuple[str, float]:
+    """Map a suspected failure mode → (priced AFE intervention, recovery fraction).
+
+    When ``lift`` is given, the intervention is gated to one that PHYSICALLY APPLIES
+    to that artificial-lift type — you can't run an ESP swap on a rod-pumped or
+    flowing well, or "optimize gas lift" on a well with no injection. When ``lift`` is
+    None the original mode-only mapping is returned unchanged (byte-identical legacy
+    behavior for callers that don't pass a lift)."""
+    m = mode or ""
+    if lift == "Gas lift":
+        if "Scale" in m:
+            return "scale_treatment", 0.18
+        return "gas_lift_optimization", 0.15
+    if lift == "Rod pump":
+        if "Scale" in m:
+            return "scale_treatment", 0.18
+        return "rod_pump_workover", 0.18
+    if lift == "Flowing":
+        if "Scale" in m:
+            return "scale_treatment", 0.15
+        return "acid_stimulation", 0.12
+    # ESP or unknown lift → the mode-driven mapping. On an ESP well a gas-interference
+    # /gas-lock call is a downhole-gas problem (handle with a gas-tolerant ESP swap),
+    # not a gas-lift system to optimize.
     for key, interv, frac in MODE_TO_INTERVENTION:
-        if key in mode:
+        if key in m:
+            if lift == "ESP" and interv == "gas_lift_optimization":
+                return "esp_swap", 0.18
             return interv, frac
     return DEFAULT_INTERVENTION
 
@@ -55,7 +80,8 @@ def _map_mode(mode: str) -> tuple[str, float]:
 def diagnose(scada_csv, well_id: str | None = None, deferred_bopd: float = 0.0,
              baseline_bopd: float = 0.0, model_path=DEFAULT_MODEL,
              field: str = "Synthetic Delaware Basin",
-             operator: str = "Synthetic Operator LLC") -> dict:
+             operator: str = "Synthetic Operator LLC",
+             lift: str | None = None) -> dict:
     df = load_well_scada(scada_csv)
     well_id = well_id or Path(scada_csv).stem
     feats = featurize_well(df)
@@ -63,7 +89,7 @@ def diagnose(scada_csv, well_id: str | None = None, deferred_bopd: float = 0.0,
     model = ESPRiskModel.load(model_path)
     risk = float(model.predict_proba(X)[0])
     mode, evidence = classify_failure_mode(feats)
-    interv, frac = _map_mode(mode)
+    interv, frac = _map_mode(mode, lift)
 
     # Uplift = what the workover protects/restores: the upstream-quantified deferral
     # if present, else a mode-dependent fraction of the well's recent rate (floored).

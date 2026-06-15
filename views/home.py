@@ -24,9 +24,10 @@ def render() -> None:
     net_deferred_usd = sum(float(getattr(a, "deferred_bopd", 0.0) or 0.0)
                            for a in active) * price * nri
 
-    b = c.board(price, nri)
-    action, _no_action = c.split_board(b)
-    opportunities, _watch = c.split_opportunities(action)
+    # Same gated tiers the Triage Board uses (real deferred + signal-gated), so Home's
+    # "Top Opportunity" is exactly the Triage Board's #1.
+    b = c.board_with_deferred(price, nri)
+    opportunities, _watch, _stable = c.triage_tiers(b)
 
     pt.context_bar([
         ("Surveillance fleet", c.scada_source_label(token)),

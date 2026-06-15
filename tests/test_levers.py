@@ -48,6 +48,39 @@ def test_economic_limit_is_sane(bootstrapped):
 
 # ---- triage scorecard is honest (better than random, not a trivial 1.0) -------
 
+def test_interventions_are_lift_appropriate(bootstrapped):
+    """The lift-aware intervention engine: every recommended intervention must be one
+    that physically applies to the well's artificial-lift type (no ESP swap on a
+    rod-pumped well, no gas-lift optimization on a well with no injection)."""
+    import fleet_registry as fr
+
+    board = core.rank_fleet(price_per_bbl=PRICE, net_revenue_interest=NRI)
+    acting = board[board["recommended_intervention"] != "no_action"]
+    valid = {
+        "ESP": {"esp_swap", "scale_treatment"},
+        "Rod pump": {"rod_pump_workover", "scale_treatment"},
+        "Gas lift": {"gas_lift_optimization", "scale_treatment"},
+        "Flowing": {"acid_stimulation", "scale_treatment"},
+    }
+    bad = []
+    for _, r in acting.iterrows():
+        lift = fr.get(str(r["well_id"])).lift
+        if r["recommended_intervention"] not in valid.get(lift, set()):
+            bad.append((str(r["well_id"]), lift, r["recommended_intervention"]))
+    assert not bad, f"lift-inappropriate interventions: {bad[:10]}"
+    # And the specific impossibilities the audit flagged never occur:
+    lift_of = {str(r["well_id"]): fr.get(str(r["well_id"])).lift
+               for _, r in acting.iterrows()}
+    for _, r in acting.iterrows():
+        interv, lift = r["recommended_intervention"], lift_of[str(r["well_id"])]
+        if interv == "gas_lift_optimization":
+            assert lift == "Gas lift"
+        if interv == "rod_pump_workover":
+            assert lift == "Rod pump"
+        if interv == "esp_swap":
+            assert lift == "ESP"
+
+
 def test_triage_scorecard_is_honest(bootstrapped):
     board = core.rank_fleet(price_per_bbl=PRICE, net_revenue_interest=NRI)
     sc = core.triage_scorecard(board)
