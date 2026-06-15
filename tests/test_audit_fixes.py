@@ -40,12 +40,19 @@ def test_notify_renders_brief_to_html_and_message(bootstrapped):
 # ---- (19) triage tier partition is total + disjoint + correctly-membered ------
 
 def _fake_board() -> pd.DataFrame:
+    # A: positive NPV but NO signal (low risk, no deferment) -> must be STABLE, not an
+    #    opportunity, even though its (cheap) intervention pencils. The whole point of
+    #    the gate once interventions are lift-aware/cheap.
+    # B: deferring + positive -> opportunity.   C: deferring + negative -> watch.
+    # D: no signal + negative -> stable.        E: no_action -> stable.
+    # G: elevated fleet-relative risk + positive (no deferment) -> opportunity.
     return pd.DataFrame({
-        "well_id": ["A", "B", "C", "D", "E", "F"],
+        "well_id": ["A", "B", "C", "D", "E", "G"],
         "recommended_intervention": ["esp_swap", "scale_treatment", "esp_swap",
-                                     "esp_swap", "no_action", "no_action"],
-        "est_risked_npv": [100.0, 50.0, -10.0, -20.0, 0.0, 0.0],
-        "deferred_bopd": [0.0, 10.0, 5.0, 0.0, 0.0, 8.0],
+                                     "esp_swap", "no_action", "rod_pump_workover"],
+        "est_risked_npv": [100.0, 50.0, -10.0, -20.0, 0.0, 80.0],
+        "deferred_bopd": [0.0, 10.0, 5.0, 0.0, 0.0, 0.0],
+        "failure_risk_30d": [0.20, 0.30, 0.30, 0.10, 0.60, 0.95],
     })
 
 
@@ -61,13 +68,15 @@ def test_triage_tiers_partition_and_membership():
     assert ids[0] | ids[1] | ids[2] == set(board["well_id"])
     assert ids[0].isdisjoint(ids[1]) and ids[0].isdisjoint(ids[2]) and ids[1].isdisjoint(ids[2])
 
-    # Membership rules: opportunities are value-accretive; watch is losing-but-not-economic.
-    assert set(opp["well_id"]) == {"A", "B"}
+    # B = deferring + positive; G = elevated-risk + positive. Both opportunities.
+    assert set(opp["well_id"]) == {"B", "G"}
     assert (opp["est_risked_npv"] > 0).all()
+    # C has a signal (deferring) but doesn't pay -> watch.
     assert set(watch["well_id"]) == {"C"}
-    assert (watch["est_risked_npv"] <= 0).all() and (watch["deferred_bopd"] > 0).all()
-    # No-action + non-deferring negatives are stable.
-    assert set(stable["well_id"]) == {"D", "E", "F"}
+    assert (watch["est_risked_npv"] <= 0).all()
+    # A is positive-NPV but has NO signal -> STABLE (the key gate behavior); D/E too.
+    assert set(stable["well_id"]) == {"A", "D", "E"}
+    assert "A" in set(stable["well_id"])
 
 
 # ---- (20) divergence / wells-down math + the net-$ convention -----------------

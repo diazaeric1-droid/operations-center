@@ -239,14 +239,32 @@ def intervention_cost(intervention: str) -> float:
         return float("nan")
 
 
+def opportunity_signal(frame: "pd.DataFrame") -> "pd.Series":
+    """Boolean mask of wells with a REAL trigger to act: actively deferring production
+    OR in the fleet's OWN elevated-risk quartile (fleet-relative, since the ESP score
+    is out-of-distribution on this fleet and uninformative in absolute terms). A
+    healthy well whose now-cheaper, lift-correct intervention merely pencils is NOT an
+    opportunity — it needs a signal first. This gate keeps the opportunity count honest
+    once interventions are lift-aware (rod-pump workovers, gas-lift jobs) and therefore
+    cheaper than a default ESP swap."""
+    deferred = (frame["deferred_bopd"] > 0) if "deferred_bopd" in frame else False
+    if "failure_risk_30d" in frame and len(frame):
+        thresh = float(frame["failure_risk_30d"].quantile(0.75))
+        elevated = frame["failure_risk_30d"] >= thresh
+    else:
+        elevated = False
+    return deferred | elevated
+
+
 def split_opportunities(action: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame"]:
     """Split the action tier into value-accretive opportunities vs an at-risk watch
-    list. An "opportunity" is a well whose recommended intervention has a POSITIVE
-    risk-weighted NPV (worth doing now); a well with a non-positive risked NPV is on
-    watch — the failure signature is there but intervening now destroys value, so
-    the action is to monitor and re-rank as risk climbs, not to spend capital."""
+    list. An "opportunity" is a well that has a real trigger (deferring production or
+    elevated fleet-relative risk) AND a positive risk-weighted NPV; everything else
+    with a signal is on watch (monitor and re-rank, don't spend capital yet)."""
+    signal = opportunity_signal(action)
     pos = action["est_risked_npv"] > 0
-    return action[pos].reset_index(drop=True), action[~pos].reset_index(drop=True)
+    return (action[signal & pos].reset_index(drop=True),
+            action[~(signal & pos)].reset_index(drop=True))
 
 
 def triage_tiers(board: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame",
@@ -254,20 +272,21 @@ def triage_tiers(board: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame",
     """Three operating tiers off the enriched board (needs the real deferred column
     from ``board_with_deferred``):
 
-    * **opportunities** — value-accretive now (positive risk-weighted NPV).
-    * **watch** — non-positive NPV BUT actively deferring production: the well is
-      losing barrels, yet at today's failure risk an intervention wouldn't pay, so
-      the action is to monitor and re-rank, not to spend capital.
-    * **stable** — non-positive NPV and no deferment: nothing to do (the bulk of a
-      healthy fleet). The ESP score on these is a low *relative* signal, not an
-      absolute failure probability.
+    * **opportunities** — a real trigger (deferring production OR elevated
+      fleet-relative risk) AND a positive risk-weighted NPV: value-accretive now.
+    * **watch** — has a trigger but the intervention doesn't pay yet (non-positive
+      NPV): monitor and re-rank, don't spend capital.
+    * **stable** — no trigger (or explicitly no-action): nothing to do — the bulk of a
+      healthy fleet. A cheap intervention that happens to pencil is NOT enough to make
+      a no-signal well an opportunity; the ESP score on these is a low relative signal,
+      not an absolute failure probability.
     """
-    action, no_action = split_board(board)
-    opportunities = action[action["est_risked_npv"] > 0].reset_index(drop=True)
-    rest = action[action["est_risked_npv"] <= 0]
-    losing = rest["deferred_bopd"] > 0
-    watch = rest[losing].reset_index(drop=True)
-    stable = pd.concat([rest[~losing], no_action]).reset_index(drop=True)
+    no_action = board["recommended_intervention"] == "no_action"
+    signal = opportunity_signal(board)
+    pos = board["est_risked_npv"] > 0
+    opportunities = board[~no_action & signal & pos].reset_index(drop=True)
+    watch = board[~no_action & signal & ~pos].reset_index(drop=True)
+    stable = board[no_action | ~signal].reset_index(drop=True)
     return opportunities, watch, stable
 
 

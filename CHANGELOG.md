@@ -4,6 +4,36 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-06-14
+
+Lift-aware intervention engine (the deferred audit lever, completed).
+
+### Changed
+- **Recommended interventions are now lift-appropriate.** The mode→intervention map
+  is gated by the well's artificial-lift type, so the board never recommends a
+  physically-impossible job: ESP swaps only on ESP wells, rod-pump workovers on
+  rod-pumped wells, gas-lift optimization only on gas-lift wells, stimulation on
+  flowing wells. (Previously a non-ESP well could default to `esp_swap` — e.g. a
+  rod-pump well in the top opportunities.) Mirrored bit-for-bit into pe-pipeline's
+  `pipeline_core` so the certified `rank_fleet ≡ pipeline_core` parity invariant
+  still holds; the Action Chain AFE uses the same lift-aware mapping, so the AFE and
+  the board agree.
+- **Opportunity gating keeps the count honest.** Because lift-correct interventions
+  are cheaper than a blanket ESP swap, they pencil on far more wells against the ESP
+  model's out-of-distribution risk — which would have inflated "opportunities" from
+  ~26 to ~63. An opportunity now requires a real trigger — actively deferring
+  production OR the fleet's own elevated-risk quartile — AND a positive risk-weighted
+  NPV. A cheap intervention that merely pencils on a no-signal well is now correctly
+  "stable", not an opportunity. Result on the demo fleet: ~30 opportunities / ~11
+  watch / ~59 stable, with diverse, physical interventions (esp_swap / rod_pump_workover
+  / gas_lift_optimization / acid / scale). Home and the Triage Board use the same
+  gated tiers, so Home's "Top Opportunity" is exactly the board's #1.
+
+### Tests
+- Regression guard: every recommended intervention is valid for its lift type. Triage
+  partition test exercises both the deferred and elevated-risk signal paths. 40 tests
+  pass; parity holds. (pe-pipeline: lift map + `well_013` lift updated, 13 pass.)
+
 ## [0.4.0] — 2026-06-14
 
 Three top-recommended levers from the audit, wired in.

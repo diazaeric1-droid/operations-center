@@ -500,7 +500,8 @@ def diagnose(alert: dict, model_path: Path | None = None) -> dict:
         alert["scada_csv"], well_id=alert.get("well_id"),
         deferred_bopd=alert.get("deferred_bopd", 0.0),
         baseline_bopd=alert.get("baseline_bopd", 0.0),
-        model_path=str(model_path or ESP_MODEL))
+        model_path=str(model_path or ESP_MODEL),
+        lift=_lift_of(alert.get("well_id")))
 
 
 def render_afe(diag: dict, working_interest: float = 1.0,
@@ -681,6 +682,16 @@ _NO_ACTION_NPV_THRESHOLD = 10_000    # $ — below this, not worth flagging
 _NO_ACTION_RISK_THRESHOLD = 0.15     # 30-day failure probability
 
 
+def _lift_of(well_id: str) -> str | None:
+    """The well's artificial-lift type from the shared fleet registry (None if the
+    registry is unavailable — callers then fall back to the lift-agnostic mapping)."""
+    try:
+        import fleet_registry
+        return fleet_registry.get(str(well_id)).lift
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def rank_fleet(price_per_bbl: float = 70.0, net_revenue_interest: float = 0.80,
                model_path: Path | None = None) -> "object":
     """Rank the WHOLE bootstrapped fleet by risked-NPV opportunity (deterministic).
@@ -719,7 +730,10 @@ def rank_fleet(price_per_bbl: float = 70.0, net_revenue_interest: float = 0.80,
             mode, _evidence = esp_explainer.classify_failure_mode(feats)
         except Exception:  # noqa: BLE001
             mode = ""
-        intervention, frac = esp_handoff._map_mode(mode)
+        # Gate the priced intervention to one valid for the well's artificial-lift
+        # type (no ESP swap on a rod-pumped well, no gas-lift optimization on a well
+        # with no injection) — the recommendation a PE reads must be physical.
+        intervention, frac = esp_handoff._map_mode(mode, _lift_of(well_id))
 
         incremental_bopd = round(max(deferred_bopd, frac * baseline_bopd, 20.0), 1)
 
