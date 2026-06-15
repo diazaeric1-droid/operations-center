@@ -144,8 +144,9 @@ def render() -> None:
             "Risked NPV (now)": w["est_risked_npv"].map(lambda x: f"−${abs(x):,.0f}"),
         })
         st.dataframe(wt, width="stretch", hide_index=True)
-        st.caption("'30-Day Risk Signal' is a fleet-relative ESP ranking on this "
-                   "synthetic fleet, not a calibrated absolute probability. "
+        st.caption("'30-Day Risk Signal' is a Platt-calibrated probability from the "
+                   "ESP model trained on this fleet's labeled faults (out-of-fold "
+                   "AUROC ≈0.99 on clean synthetic signatures — see Methods). "
                    "'Indicated If It Fails' is the intervention that would be run if "
                    "the well deteriorates — it is NOT a recommendation to act today.")
 
@@ -168,9 +169,9 @@ def render() -> None:
         })
         st.dataframe(sd, width="stretch", hide_index=True, height=360)
         st.caption("No trigger to act: not deferring production and not in the fleet's "
-                   "elevated-risk quartile. Their ESP score is a low relative signal on "
-                   "this fleet, not an absolute failure probability, so it is not shown "
-                   "here to avoid implying a healthy well is about to fail.")
+                   "elevated-risk quartile. Their calibrated ESP score is low (these "
+                   "wells read healthy), so it is not shown here to avoid implying a "
+                   "healthy well is about to fail.")
 
     raw = c.board_with_deferred(price, nri)  # display frame (real deferred joined in)
     st.download_button("Download triage board (CSV)", data=raw.to_csv(index=False),

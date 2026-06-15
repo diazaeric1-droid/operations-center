@@ -45,15 +45,34 @@ def render() -> None:
         "uncertainties (incremental rate, uplift decline, realized price); its P50 "
         "reconciles exactly with the deterministic Net NPV.")
 
-    pt.section("The ESP failure score is fleet-RELATIVE here, not calibrated")
+    pt.section("ESP failure-risk model card")
+    ev = _esp_eval()
+    if ev:
+        m = st.columns(4)
+        m[0].metric("AUROC (out-of-fold)", f"{ev['auroc_cv_mean']:.3f}",
+                    f"± {ev['auroc_cv_std']:.3f}", delta_color="off")
+        m[1].metric("Brier (OOF)", f"{ev['brier']:.3f}", "lower is better",
+                    delta_color="off")
+        m[2].metric("Precision @ top 10%", f"{ev['precision_at_top10pct']:.0%}",
+                    delta_color="off")
+        m[3].metric("Calibrated", "yes" if ev["calibrated"] else "no",
+                    f"{ev['n_positives']}/{ev['n_wells']} impaired", delta_color="off")
     st.markdown(
-        "The ESP risk model was trained on the ESP component's own fleet; on this "
-        "console's **digest** fleet it scores **out-of-distribution**, so the absolute "
-        "percentage is not a calibrated probability. The console treats it as a "
-        "**fleet-relative ranking** — the elevated-risk quartile — never as a "
-        "stand-alone 'this well has an X% chance of failing'. If the model can't load "
-        "at all, every well falls back to a baseline risk and the Triage Board / Home "
-        "show a visible **degradation banner** rather than a misleading uniform fleet.")
+        "The 30-day failure score is a **Platt-calibrated probability** from an XGBoost "
+        "model **trained on the digest fleet itself** — the fleet the console scores — "
+        "using the generator's ground-truth fault labels. (Earlier it was trained on a "
+        "*different* fleet and scored this one out-of-distribution, so the console only "
+        "trusted its fleet-relative ranking; the model is now calibrated on this fleet.) "
+        "The metrics above are **out-of-fold** (stratified CV), so they measure "
+        "generalization, not memorization.\n\n"
+        "**Read the high AUROC honestly:** it is near-perfect because the synthetic "
+        "fault signatures are cleanly separable *by design* — it is an **upper bound on "
+        "clean data, not a real-world claim.** On a real operator's messy historian we "
+        "would expect ~0.85 and treat that drop as the real signal. The displayed "
+        "per-well score is the calibrated probability (slightly optimistic vs the OOF "
+        "metric on the training wells). If the model can't load at all, every well "
+        "falls back to a baseline risk and the Triage Board / Home show a visible "
+        "**degradation banner** rather than a misleading uniform fleet.")
 
     pt.section("Lift-aware interventions")
     st.markdown(
@@ -112,5 +131,13 @@ def _scorecard(price: float, nri: float):
     import core
     try:
         return core.triage_scorecard(c.board_with_deferred(price, nri))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _esp_eval():
+    import core
+    try:
+        return core.esp_model_eval()
     except Exception:  # noqa: BLE001
         return None

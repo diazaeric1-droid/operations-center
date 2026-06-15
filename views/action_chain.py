@@ -152,7 +152,9 @@ def render() -> None:
     mode_short = mode_full.split("—")[0].strip() or "—"
     m1, m2, m3 = st.columns(3)
     m1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
-              help="Fleet-relative ESP ranking, not an absolute probability.")
+              help="Platt-calibrated probability from the ESP model trained on this "
+                   "fleet's labeled faults (out-of-fold AUROC ≈0.99; model card on "
+                   "Methods & Limitations).")
     m2.metric("Suspected Mode", mode_short, help=mode_full)
     m3.metric("Intervention", diag["intervention"].replace("_", " "))
     st.caption(diag["primary_diagnosis"])

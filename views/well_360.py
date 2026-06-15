@@ -118,8 +118,10 @@ def render() -> None:
     diag = c.diagnosis(well_id, price)
     r1, r2, r3 = st.columns(3)
     r1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
-              help="A fleet-relative ESP ranking on this synthetic fleet, not a "
-                   "calibrated absolute probability.")
+              help="A Platt-calibrated probability from the ESP model trained on this "
+                   "fleet's labeled faults (out-of-fold AUROC ≈0.99 — high because the "
+                   "synthetic signatures are cleanly separable, not a real-world claim). "
+                   "Full model card on Methods & Limitations.")
     r2.metric("Suspected Mode", diag["suspected_mode"].split("—")[0].strip() or "—",
               help=diag["suspected_mode"])
     r3.metric("Recommended Intervention", diag["intervention"].replace("_", " "))

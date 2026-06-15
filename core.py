@@ -98,6 +98,9 @@ DIGEST_FLEET = APP_DIRS["digest"] / "data" / "synthetic" / "fleet"
 DIGEST_ACK = APP_DIRS["digest"] / "acknowledged.yml"
 ESP_DATA = APP_DIRS["esp"] / "data" / "synthetic"
 ESP_MODEL = APP_DIRS["esp"] / "artifacts" / "esp_risk_model.joblib"
+# Honest out-of-fold eval of the SHIPPED model (also the marker that the model was
+# trained the new way — ON the digest fleet — rather than scoring it OOD).
+ESP_EVAL = APP_DIRS["esp"] / "artifacts" / "esp_eval.json"
 DEFERMENT_DATA = APP_DIRS["deferment"] / "data" / "synthetic"
 DEFERMENT_WELLS = DEFERMENT_DATA / "wells"
 DEFERMENT_EVENTS = DEFERMENT_DATA / "events.csv"
@@ -164,20 +167,62 @@ def ensure_deferment_data(log=print) -> None:
 
 
 def ensure_esp_model(log=print) -> Path:
-    if ESP_MODEL.exists():
+    """Train the ESP failure-risk model **on the digest fleet** — the fleet the console
+    actually scores — using the generator's ground-truth fault labels, so the risk
+    score is a calibrated probability ON THIS fleet instead of an out-of-distribution
+    score from the ESP component's own (different) fleet. Persists an honest
+    out-of-fold eval (esp_eval.json) that also marks the model as digest-trained;
+    a model missing that marker is retrained (self-heals an old OOD artifact)."""
+    if ESP_MODEL.exists() and ESP_EVAL.exists():
         return ESP_MODEL
-    if not any(ESP_DATA.glob("well_*.csv")):
-        log("Generating synthetic SCADA (ESP)…")
-        runpy.run_path(str(ESP_DATA / "generate.py"), run_name="__main__")
-    log("Training the ESP failure-risk model (~30s, one time)…")
-    fleet = esp_loader.load_fleet(ESP_DATA)
+    import pandas as pd
+    ensure_digest_data(log)
+    gt_path = DIGEST_FLEET.parent / "ground_truth.csv"
+    if not gt_path.exists():
+        # Defensive: regenerate the fleet (writes ground_truth) if it's somehow absent.
+        runpy.run_path(str(APP_DIRS["digest"] / "data" / "synthetic" / "generate_fleet.py"),
+                       run_name="__main__")
+    log("Training the ESP failure-risk model on the digest fleet (~10s, one time)…")
+    fleet = digest_loader.load_fleet(DIGEST_FLEET)
     X = esp_features.featurize_fleet(fleet)
-    labels = esp_loader.load_labels(ESP_DATA / "labels.csv").set_index("well_id")["failed_within_30d"]
-    aligned = X.join(labels, how="inner")
+    gt = pd.read_csv(gt_path).set_index("well_id")["impaired"]
+    aligned = X.join(gt, how="inner")
+    y = aligned["impaired"].astype(int)
     m = esp_model.ESPRiskModel()
-    m.fit(aligned[X.columns], aligned["failed_within_30d"])
+    result = m.fit(aligned[list(X.columns)], y)
     m.save(ESP_MODEL)
+    _write_esp_eval(result)
+    log(f"ESP model: out-of-fold AUROC {result.auroc_cv_mean:.3f}, "
+        f"Brier {result.brier:.3f}, precision@10% {result.precision_at_top10pct:.2f} "
+        f"({result.n_positives}/{result.n_wells} impaired).")
     return ESP_MODEL
+
+
+def _write_esp_eval(result) -> None:
+    import json
+    ESP_EVAL.parent.mkdir(parents=True, exist_ok=True)
+    ESP_EVAL.write_text(json.dumps({
+        "auroc_cv_mean": float(result.auroc_cv_mean),
+        "auroc_cv_std": float(result.auroc_cv_std),
+        "precision_at_top10pct": float(result.precision_at_top10pct),
+        "recall_at_top10pct": float(result.recall_at_top10pct),
+        "n_flagged_top10pct": int(result.n_flagged_top10pct),
+        "brier": float(result.brier),
+        "n_wells": int(result.n_wells),
+        "n_positives": int(result.n_positives),
+        "calibrated": bool(result.calibrated),
+        "trained_on": "digest_fleet_ground_truth",
+    }, indent=2))
+
+
+def esp_model_eval() -> dict | None:
+    """The shipped ESP model's honest out-of-fold eval (model card). None if the model
+    predates the digest-fleet recalibration."""
+    import json
+    try:
+        return json.loads(ESP_EVAL.read_text())
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def bootstrap(log=print) -> None:
@@ -251,11 +296,9 @@ def elevated_risk_wells(risk_by_well: dict | None,
                         top_frac: float = 0.25) -> set[str]:
     """The fleet's OWN highest-risk wells (top ``top_frac`` by 30-day ESP score).
 
-    The ESP model is trained on the ESP component's synthetic SCADA, so its score
-    on the surveillance fleet is a *relative* failure-signature ranking, not a
-    calibrated absolute probability — an absolute cutoff (e.g. ≥50%) would flag most
-    of the fleet. A fleet-relative top quantile is the honest, credible reading:
-    "the wells whose signature looks worst right now." A well must also sit above
+    The ESP score is calibrated on this fleet (trained on its labeled faults), but a
+    fleet-relative top quantile is still the robust way to define "watch": it adapts
+    to the day's fleet rather than a fixed absolute cutoff, and a well must sit above
     the fleet median to be flagged, so a uniformly-healthy fleet flags nobody."""
     if not risk_by_well:
         return set()

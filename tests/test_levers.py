@@ -104,6 +104,28 @@ def test_esp_model_ships_calibrated(bootstrapped):
     assert m.calibrator is not None
 
 
+def test_esp_model_recalibrated_on_digest_fleet(bootstrapped):
+    """The ESP model is trained ON the digest fleet (the fleet the console scores) with
+    its ground-truth labels, so the score is calibrated and separates impaired from
+    healthy — not a uniform out-of-distribution blob."""
+    import numpy as np
+    import pandas as pd
+
+    ev = core.esp_model_eval()
+    assert ev is not None
+    assert ev["trained_on"] == "digest_fleet_ground_truth"
+    assert ev["calibrated"] is True
+    assert ev["auroc_cv_mean"] > 0.7                  # honest OOF AUROC, well above chance
+    assert 0 < ev["n_positives"] < ev["n_wells"]
+
+    fleet = core.load_scada_fleet()
+    risk = core._score_fleet_risk(fleet, core.ESP_MODEL)
+    gt = pd.read_csv(core.DIGEST_FLEET.parent / "ground_truth.csv").set_index("well_id")
+    imp = np.median([risk[w] for w in risk if int(gt.loc[w, "impaired"]) == 1])
+    heal = np.median([risk[w] for w in risk if int(gt.loc[w, "impaired"]) == 0])
+    assert imp > heal + 0.3                           # impaired clearly above healthy
+
+
 def test_triage_scorecard_is_honest(bootstrapped):
     board = core.rank_fleet(price_per_bbl=PRICE, net_revenue_interest=NRI)
     sc = core.triage_scorecard(board)

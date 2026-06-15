@@ -241,8 +241,8 @@ def intervention_cost(intervention: str) -> float:
 
 def opportunity_signal(frame: "pd.DataFrame") -> "pd.Series":
     """Boolean mask of wells with a REAL trigger to act: actively deferring production
-    OR in the fleet's OWN elevated-risk quartile (fleet-relative, since the ESP score
-    is out-of-distribution on this fleet and uninformative in absolute terms). A
+    OR in the fleet's OWN elevated-risk quartile (a robust fleet-relative cut on the
+    now-calibrated ESP score, trained on this fleet's labeled faults). A
     healthy well whose now-cheaper, lift-correct intervention merely pencils is NOT an
     opportunity — it needs a signal first. This gate keeps the opportunity count honest
     once interventions are lift-aware (rod-pump workovers, gas-lift jobs) and therefore
@@ -278,8 +278,7 @@ def triage_tiers(board: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame",
       NPV): monitor and re-rank, don't spend capital.
     * **stable** — no trigger (or explicitly no-action): nothing to do — the bulk of a
       healthy fleet. A cheap intervention that happens to pencil is NOT enough to make
-      a no-signal well an opportunity; the ESP score on these is a low relative signal,
-      not an absolute failure probability.
+      a no-signal well an opportunity; these wells read low on the calibrated ESP score.
     """
     no_action = board["recommended_intervention"] == "no_action"
     signal = opportunity_signal(board)
