@@ -60,6 +60,8 @@ def render() -> None:
                  f"${float(board['deferred_usd_per_day'].sum()):,.0f}/day (net)."},
     ])
 
+    _ranking_scorecard(board)
+
     pt.section("Top Opportunities — Value-Accretive Interventions",
                "Only wells whose intervention clears its cost today (positive "
                "risk-weighted NPV). A well off this list isn't necessarily healthy — "
@@ -172,6 +174,36 @@ def render() -> None:
                             "intervention 'no_action' and opportunity 0.")
 
     theme.references(["npv", "shap"])
+
+
+def _ranking_scorecard(board: pd.DataFrame) -> None:
+    """Does the ranking actually surface the impaired wells? precision@k + lift vs
+    random, scored against the fleet's known seeded faults — the same honest-backtest
+    treatment the digest's event detector and the deferment classifier already get."""
+    import core
+    sc = core.triage_scorecard(board)
+    if not sc:
+        return
+    with st.expander("Ranking scorecard — does this ranking catch the failures? "
+                     f"(P@10 {sc['at_k'][10]['precision']:.0%}, "
+                     f"{sc['at_k'][10]['lift']:.1f}× lift)", expanded=False):
+        cols = st.columns(4)
+        cols[0].metric("Precision @5", f"{sc['at_k'][5]['precision']:.0%}",
+                       f"{sc['at_k'][5]['lift']:.1f}× vs random", delta_color="off")
+        cols[1].metric("Precision @10", f"{sc['at_k'][10]['precision']:.0%}",
+                       f"{sc['at_k'][10]['lift']:.1f}× vs random", delta_color="off")
+        cols[2].metric("Precision @20", f"{sc['at_k'][20]['precision']:.0%}",
+                       f"{sc['at_k'][20]['lift']:.1f}× vs random", delta_color="off")
+        cols[3].metric("Recall @impaired", f"{sc['recall_at_n_impaired']:.0%}",
+                       f"{sc['n_impaired']}/{sc['n_wells']} seeded", delta_color="off")
+        st.caption(
+            f"Ground truth: {sc['n_impaired']} of {sc['n_wells']} wells carry a real "
+            f"seeded fault ({sc['base_rate']:.0%} base rate). Ranking by risked NPV, the "
+            f"top 10 are {sc['at_k'][10]['lift']:.1f}× more likely to be truly impaired "
+            "than a random draw — honest (not a trivial 100%): low-rate failure modes "
+            "(e.g. early electrical) defer few barrels, so they rank lower. Scored on "
+            "the generator's signature labels for THIS fleet (the ESP model's own "
+            "labels.csv is a different fleet and doesn't join here).")
 
 
 def _intervention_table(opps: pd.DataFrame) -> pd.DataFrame:

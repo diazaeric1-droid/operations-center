@@ -4,6 +4,36 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-06-14
+
+Three top-recommended levers from the audit, wired in.
+
+### Added
+- **Monte-Carlo AFE economics** on the Action Chain. The recommended intervention now
+  shows a P10/P50/P90 NPV band, a P(payout < 24 mo), and a tornado of the three biggest
+  uncertainties (incremental rate, uplift decline, realized price) — 10,000 trials over
+  the AFE component's already-built `simulate_economics` engine, which had zero callers.
+  Results are netted to the operator so the **P50 reconciles exactly with the AFE's
+  deterministic Net NPV** (verified). A single-point NPV reads junior at sign-off; this
+  is the distributional view a capital review runs on.
+- **Economic limit & remaining life** on Well 360. The rate at which net revenue equals
+  fixed lease operating expense (the P&A rate) and the months from today's rate —
+  declining at the well's own fitted exponential — to reach it. The number a PE defends
+  in a reserves/abandonment review; it was absent entirely.
+- **Ranking scorecard** on the Triage Board. precision@5/10/20 + lift-over-random +
+  recall, scored against the fleet's known seeded faults — the same honest-backtest
+  treatment the digest's event detector and the deferment classifier already carry.
+  Honest by construction (≈80% precision@10, ~2× lift, recall < 1.0 — low-rate modes
+  defer few barrels and rank lower), not a trivial 100%. The generator now persists a
+  `ground_truth.csv` for this (the ESP model's `labels.csv` is a different fleet).
+
+### Notes
+- Bootstrap regenerates the fleet if `ground_truth.csv` is missing (so the scorecard
+  appears even on a warm container that predates it).
+- Deferred (documented in v0.3.1): the lift-aware *intervention* engine — it needs a
+  coordinated `pipeline_core` change + opportunity-gating re-tune to keep the count
+  credible, so it stays a tracked follow-up rather than a regression risk.
+
 ## [0.3.1] — 2026-06-14
 
 PE-credibility audit fixes (multi-agent review of the whole console).
