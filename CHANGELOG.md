@@ -4,6 +4,18 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-06-15
+
+### Fixed
+- **Warm-container module self-heal hardened.** Streamlit Cloud reuses the Python
+  process across redeploys, so a cached OLD copy of one of our modules can lack
+  symbols added in a newer commit → `AttributeError` at run. The self-heal now runs
+  once per session and evicts **every** product-owned module — the component aliases
+  (`digest`, `deferment`, `esp`, `afe`) and `src.*` in addition to `core`,
+  `product_theme`, `theme`, `fleet_registry`, and `views.*` (previously it ran every
+  rerun and only evicted the three shared modules). Skipped under pytest to preserve
+  the cross-test module-identity invariants.
+
 ## [0.7.1] — 2026-06-15
 
 PE-scrutiny readiness pass — fixes the on-screen self-contradictions a 6-persona

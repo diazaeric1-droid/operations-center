@@ -15,18 +15,28 @@ from pathlib import Path
 
 import streamlit as st
 
-# --- warm-container module self-heal (vendored top-level modules) -------------
-# Streamlit Cloud reuses the container across redeploys; a cached OLD theme /
-# fleet_registry / product_theme in sys.modules (or stale .pyc) can lack symbols
-# added in a newer commit. Drop bytecode + evict so imports reload from source.
-import shutil as _sh_heal
-
 HERE = Path(__file__).resolve().parent
-_sh_heal.rmtree(HERE / "__pycache__", ignore_errors=True)
-for _stale in ("theme", "fleet_registry", "product_theme"):
-    sys.modules.pop(_stale, None)
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+
+# --- warm-container module self-heal (ALL product-owned modules) --------------
+# Streamlit Cloud reuses the Python process across redeploys; a cached OLD copy of
+# one of OUR modules in sys.modules (or a stale .pyc) can lack symbols added in a
+# newer commit -> AttributeError at run (e.g. a views helper missing a new function).
+# Drop our bytecode + evict every product-owned module so the imports below + the
+# view pages reload from the CURRENT commit's source. Gated ONCE per session
+# (Streamlit re-runs this whole script on every interaction). Skipped under pytest,
+# where modules are already fresh and evicting would break module-identity invariants.
+if "pytest" not in sys.modules and not st.session_state.get("_ops_healed"):
+    import shutil as _sh_heal
+    for _pyc in HERE.rglob("__pycache__"):
+        _sh_heal.rmtree(_pyc, ignore_errors=True)
+    _OWN = ("core", "product_theme", "theme", "fleet_registry",
+            "digest", "deferment", "esp", "afe", "views", "src")
+    for _m in list(sys.modules):
+        if any(_m == p or _m.startswith(p + ".") for p in _OWN):
+            sys.modules.pop(_m, None)
+    st.session_state["_ops_healed"] = True
 
 import product_theme as pt  # noqa: E402
 
