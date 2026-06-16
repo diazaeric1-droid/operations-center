@@ -102,6 +102,11 @@ ESP_MODEL = APP_DIRS["esp"] / "artifacts" / "esp_risk_model.joblib"
 # Honest out-of-fold eval of the SHIPPED model (also the marker that the model was
 # trained the new way — ON the digest fleet — rather than scoring it OOD).
 ESP_EVAL = APP_DIRS["esp"] / "artifacts" / "esp_eval.json"
+# Eval-method marker: bumped when the metric COMPUTATION changes so a warm container /
+# existing checkout with a stale eval retrains instead of serving old numbers. v2 =
+# end-to-end calibrated out-of-fold (Platt in-fold), so the Brier describes the shipped
+# calibrated probabilities rather than the raw booster.
+ESP_EVAL_METHOD = "calibrated_oof_v2"
 DEFERMENT_DATA = APP_DIRS["deferment"] / "data" / "synthetic"
 DEFERMENT_WELLS = DEFERMENT_DATA / "wells"
 DEFERMENT_EVENTS = DEFERMENT_DATA / "events.csv"
@@ -173,9 +178,16 @@ def ensure_esp_model(log=print) -> Path:
     score is a calibrated probability ON THIS fleet instead of an out-of-distribution
     score from the ESP component's own (different) fleet. Persists an honest
     out-of-fold eval (esp_eval.json) that also marks the model as digest-trained;
-    a model missing that marker is retrained (self-heals an old OOD artifact)."""
+    a model missing that marker is retrained (self-heals an old OOD artifact). The eval
+    also carries an ``eval_method`` marker — a stale method (e.g. the pre-calibrated-OOF
+    metrics) retrains too, so a warm container never serves outdated model-card numbers."""
     if ESP_MODEL.exists() and ESP_EVAL.exists():
-        return ESP_MODEL
+        _ev = esp_model_eval()
+        if _ev and _ev.get("eval_method") == ESP_EVAL_METHOD:
+            return ESP_MODEL
+        log("ESP eval present but its method marker is stale "
+            f"({_ev.get('eval_method') if _ev else None} ≠ {ESP_EVAL_METHOD}) — "
+            "retraining so the model card shows current metrics…")
     import pandas as pd
     ensure_digest_data(log)
     gt_path = DIGEST_FLEET.parent / "ground_truth.csv"
@@ -213,6 +225,7 @@ def _write_esp_eval(result) -> None:
         "n_positives": int(result.n_positives),
         "calibrated": bool(result.calibrated),
         "trained_on": "digest_fleet_ground_truth",
+        "eval_method": ESP_EVAL_METHOD,
     }, indent=2))
 
 
@@ -293,6 +306,34 @@ def _is_down(last: float, base: float) -> bool:
                                     and last < DOWN_FRAC_OF_BASELINE * base)
 
 
+def down_wells(fleet: dict) -> set[str]:
+    """Well ids that are currently down / shut-in (≈0 production vs their own baseline).
+    The view layer routes these into a 'Restore' queue instead of pricing them as
+    interventions — a shut-in well is a restore-first job, not a gas-lift optimization."""
+    out: set[str] = set()
+    for wid, df in fleet.items():
+        last, base = _latest_and_baseline(df)
+        if _is_down(last, base):
+            out.add(str(wid))
+    return out
+
+
+# A well at or above this calibrated 30-day failure probability is "elevated risk" in
+# ABSOLUTE terms. The model is calibrated on this fleet (trained on its labeled faults),
+# so an absolute band is meaningful — and, unlike a fleet-relative quartile, it does not
+# collapse to ~zero on a heavily-impaired fleet (the Home "Elevated Risk = 0 while 37
+# wells score ≥0.8" contradiction).
+ELEVATED_RISK_ABS_30D = 0.50
+
+
+def at_risk_wells_abs(risk_by_well: dict | None) -> set[str]:
+    """Wells at elevated ABSOLUTE calibrated 30-day failure risk (≥ ELEVATED_RISK_ABS_30D)."""
+    if not risk_by_well:
+        return set()
+    return {str(w) for w, r in risk_by_well.items()
+            if r is not None and float(r) >= ELEVATED_RISK_ABS_30D}
+
+
 def elevated_risk_wells(risk_by_well: dict | None,
                         top_frac: float = 0.25) -> set[str]:
     """The fleet's OWN highest-risk wells (top ``top_frac`` by 30-day ESP score).
@@ -321,13 +362,15 @@ def fleet_health_summary(fleet: dict, anomalies: list,
 
     * **impaired** (red): producing a real loss right now — an active anomaly with
       deferred $/day, or a well that is down (≈0 production).
-    * **watch** (amber): a non-$ active flag (e.g. comms/metering) or one of the
-      fleet's own highest-risk wells (top ``risk_top_frac`` by ESP score).
-    * **healthy** (green): everything else — flowing on/around baseline, low relative
-      risk.
+    * **watch** (amber): a non-$ active flag (e.g. comms/metering) or a well at elevated
+      ABSOLUTE calibrated risk (≥ ``ELEVATED_RISK_ABS_30D``) that is NOT already losing.
+    * **healthy** (green): everything else — flowing on/around baseline, low risk.
 
-    Pure/deterministic. ESP risk is folded in *relatively* (see
-    ``elevated_risk_wells``) so the glance never claims most of the fleet is failing."""
+    Pure/deterministic. Watch uses an ABSOLUTE calibrated band (the model is calibrated on
+    this fleet), reported alongside how many elevated-risk wells are already counted in
+    Impaired — so "0 amber" can never read as "0 wells at risk" when the high-risk wells
+    are simply already losing (the old fleet-relative quartile residual collapsed to ~0
+    on a heavily-impaired fleet). ``risk_top_frac`` is retained for back-compat callers."""
     total = len(fleet)
     active = [a for a in anomalies if not getattr(a, "acknowledged", False)]
     losing = {str(a.well_id) for a in active if getattr(a, "deferred_bopd", 0.0) > 0}
@@ -340,10 +383,10 @@ def fleet_health_summary(fleet: dict, anomalies: list,
         if _is_down(last, base):
             down.add(str(wid))
 
-    at_risk = elevated_risk_wells(risk_by_well, top_frac=risk_top_frac)
+    elevated_abs = at_risk_wells_abs(risk_by_well)
 
     impaired = losing | down
-    watch = (flagged | at_risk) - impaired
+    watch = (flagged | elevated_abs) - impaired
     healthy = max(total - len(impaired) - len(watch), 0)
     return {
         "total": total,
@@ -352,7 +395,11 @@ def fleet_health_summary(fleet: dict, anomalies: list,
         "impaired": len(impaired),
         "down": len(down),
         "losing": len(losing),
-        "at_risk": len(at_risk),
+        "at_risk": len(elevated_abs),
+        # How many wells score elevated in ABSOLUTE terms, and how many of those are
+        # already in Impaired (so the caption can explain a small/zero amber count).
+        "elevated_abs": len(elevated_abs),
+        "elevated_abs_impaired": len(elevated_abs & impaired),
         "fleet_bopd": round(fleet_bopd, 0),
         "pct_nominal": round(100.0 * healthy / total, 0) if total else 0.0,
     }
@@ -601,9 +648,17 @@ def economic_limit(scada, realized_price: float = 70.0,
     from today's PRODUCING rate — declining at the well's ESTABLISHED-trend rate — to
     reach it. The number a PE defends in a reserves/abandonment review.
 
-    Two guards keep this honest on troubled wells (which a reviewer opens first):
+    Three guards keep this honest on troubled wells (which a reviewer opens first):
     - it returns ``{"status": "down"}`` for a well that is currently shut in / collapsed
-      (a reserves read on a well that's offline is meaningless — restore it first);
+      (a reserves read on a well that's offline is meaningless — restore it first), keyed
+      off a SUSTAINED recent rate so a steady ramp-down to a fraction of trend is caught,
+      not only a hard shut-in;
+    - the displayed **current rate** is the recent trailing producing rate (what the
+      chart shows today), NOT the 30-day median — on an actively-declining well the
+      30-day median still reflects the pre-collapse plateau and would overstate today's
+      deliverability ~2× (e.g. 374 vs ~196 BOPD), reading as a clean "19 yr left" right
+      next to a high failure signal. It also flags ``below_established_trend`` when the
+      recent rate is materially under the trend, so the view can caveat it;
     - it fits the decline on the ESTABLISHED trend (the same first-80% basis as the
       type-curve overlay, via ``fit_well_decline``), so a recent multi-day outage isn't
       read as terminal exponential decline (which produced absurd '1.1 yr remaining'
@@ -623,16 +678,25 @@ def economic_limit(scada, realized_price: float = 70.0,
     if margin <= 0:
         return None
     q_limit = loe_per_month / (margin * 30.4)                       # bopd at the limit
-    # Robust current rate: median of the last 30 PRODUCING days (ignore outage zeros),
-    # not a mean that a 6-day shut-in would crater — or inflate (an offline well's mean
-    # over a window that still contains pre-outage days reads far above today's rate).
-    recent = oil[-30:]
-    producing = recent[recent > 1.0]
-    q_now = float(np.median(producing)) if len(producing) >= 5 else float(np.median(recent))
-    # Currently down/collapsed? Today's rate far below the recent producing rate.
-    if float(oil[-1]) < max(1.0, 0.25 * q_now):
-        return {"status": "down", "q_now_bopd": q_now,
+    # Established-trend baseline: median of the last 30 PRODUCING days (ignore outage
+    # zeros) — the well's recent plateau before any acute collapse.
+    recent30 = oil[-30:]
+    prod30 = recent30[recent30 > 1.0]
+    q_trend = float(np.median(prod30)) if len(prod30) >= 5 else float(np.median(recent30))
+    # Current rate: the recent trailing producing rate (what the chart shows TODAY). On a
+    # collapsing well this is far below q_trend, so the panel reflects reality instead of
+    # the pre-collapse plateau.
+    recent7 = oil[-7:]
+    prod7 = recent7[recent7 > 1.0]
+    q_recent = float(np.median(prod7)) if len(prod7) >= 3 else q_trend
+    # Currently down/collapsed? A sustained recent rate far below the established trend
+    # (or a hard shut-in today). Keyed off q_recent, not a single last day, so a gradual
+    # ramp-down to a fraction of trend doesn't sail through as "ok".
+    if q_recent < max(1.0, 0.25 * q_trend) or float(oil[-1]) < 1.0:
+        return {"status": "down", "q_now_bopd": q_recent, "q_trend_bopd": q_trend,
                 "net_margin_per_bbl": margin, "loe_per_month": loe_per_month}
+    q_now = q_recent
+    below_trend = q_recent < 0.70 * q_trend     # acutely under-performing its own trend
     Di = fit["Di_per_day"]                                          # established-trend, <0
     d_monthly = -Di * 30.4
     if q_now <= q_limit:
@@ -642,6 +706,7 @@ def economic_limit(scada, realized_price: float = 70.0,
     else:
         months = float(np.log(q_now / q_limit) / d_monthly)
     return {"status": "ok", "q_limit_bopd": q_limit, "q_now_bopd": q_now,
+            "q_trend_bopd": q_trend, "below_established_trend": bool(below_trend),
             "months_remaining": months, "net_margin_per_bbl": margin,
             "loe_per_month": loe_per_month,
             "annual_decline_pct": fit["annual_decline_pct"]}

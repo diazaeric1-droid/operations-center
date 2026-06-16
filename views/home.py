@@ -25,9 +25,11 @@ def render() -> None:
                            for a in active) * price * nri
 
     # Same gated tiers the Triage Board uses (real deferred + signal-gated), so Home's
-    # "Top Opportunity" is exactly the Triage Board's #1.
+    # "Top Opportunity" is exactly the Triage Board's #1 — with currently-down wells held
+    # out into the Restore queue first (a shut-in well isn't a priced opportunity).
     b = c.board_with_deferred(price, nri)
-    opportunities, _watch, _stable = c.triage_tiers(b)
+    _restore, b_live = c.restore_tier(b, c.down_well_set(c.DISK_TOKEN))
+    opportunities, _watch, _stable = c.triage_tiers(b_live)
 
     pt.context_bar([
         ("Surveillance fleet", c.scada_source_label(token)),
@@ -208,8 +210,8 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
     cols = st.columns(4)
     cols[0].metric("Healthy", f"{h['healthy']}", f"{h['pct_nominal']:.0f}% nominal")
     cols[1].metric("Elevated Risk", f"{h['watch']}",
-                   "highest-risk quartile / DQ flag" if h["watch"] else None,
-                   delta_color="off")
+                   f"≥{int(core.ELEVATED_RISK_ABS_30D * 100)}% risk, not yet losing"
+                   if h["watch"] else "none not-yet-losing", delta_color="off")
     cols[2].metric("Impaired", f"{h['impaired']}",
                    f"{h['down']} down · {h['losing']} losing", delta_color="inverse")
     cols[3].metric("Fleet Oil Rate", f"{h['fleet_bopd']:,.0f} BOPD",
@@ -223,12 +225,18 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
         + " " + pt.pill(f"{n_high} HIGH-severity alert{'s' if n_high != 1 else ''}",
                         "bad" if n_high else "ok"),
         unsafe_allow_html=True)
-    st.caption("Elevated Risk = the fleet's own highest-risk quartile by the failure "
-               "signature (a Platt-calibrated probability from a model trained on this "
-               "fleet's labeled faults; model card on Methods & Limitations) plus any "
-               "non-$ data-quality flag. This is a HEALTH read — distinct from the "
-               "Triage Board's economic 'Watch' tier (a losing well an intervention "
-               "wouldn't pay for yet). All figures deterministic — no API key required.")
+    pct = int(core.ELEVATED_RISK_ABS_30D * 100)
+    st.caption(
+        f"Elevated Risk (amber) = wells at ≥{pct}% **calibrated** 30-day failure "
+        "probability that are NOT already losing production, plus any non-$ data-quality "
+        f"flag — a forward-looking HEALTH watch list. ({h['elevated_abs']} wells fleet-wide "
+        f"score ≥{pct}%; the {h['elevated_abs_impaired']} already losing or down are counted "
+        "in Impaired, not double-counted here — so a low amber count means the high-risk "
+        "wells are already in the red, not that nothing is at risk.) The score is "
+        "Platt-calibrated (model trained on this fleet's labeled faults; card on Methods & "
+        "Limitations). Distinct from the Triage Board's economic 'Watch' tier (a losing "
+        "well an intervention wouldn't pay for yet). All figures deterministic — no API "
+        "key required.")
 
 
 def core_fleet_size() -> int:

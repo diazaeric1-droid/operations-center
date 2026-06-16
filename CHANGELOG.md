@@ -4,6 +4,59 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] — 2026-06-16
+
+Scoped adversarial re-audit of the v0.7.0/v0.7.1 post-fix surface (a second 6-persona
+pass, every finding reproduced against the code and 3-lens verified) closed the residual
+self-contradictions a PE would still hit on the first wells they open — plus the
+model-card honesty gap. Parity with pe-pipeline's `pipeline_core.rank_fleet` is preserved
+bit-for-bit (the certified ranking and `_map_mode` are untouched; #5/#6/#9 are view-layer).
+55 tests (was 47).
+
+### Fixed — model card honesty (the ML-reviewer's question)
+- **Out-of-fold metrics are now END-TO-END calibrated.** `_cross_validate` previously
+  scored each fold with the *raw* booster, so the persisted AUROC/Brier described the
+  uncalibrated model while a "Calibrated: yes" tile sat beside them. Each fold now trains
+  *and* Platt-calibrates exactly as the shipped artifact does, so the Brier describes the
+  calibrated probabilities the console shows (AUROC 0.994→**0.979**, Brier 0.036→**0.055** —
+  the honest numbers). An `eval_method` marker self-heals a stale eval on warm containers.
+- **Recall is now on the model card** beside precision, with the honest framing that
+  precision@10% is structurally near-100% on a heavily-impaired fleet and recall@10% is
+  capped by flagging only the top 10% — read them as a pair.
+- **No fabricated real-world AUROC.** The "~0.85 on a real historian" figure is reframed
+  as an engineering expectation (we have no labeled operator historian to measure one),
+  not a quoted result. Stale "AUROC ≈0.99" captions updated to ≈0.98.
+
+### Fixed — on-screen self-contradictions (a PE catches these first)
+- **Gas-lift gas-interference evidence cites the displayed channels.** It quoted the
+  hidden ESP intake pressure ("flowing pressure at 56 psi") on a well whose shown channels
+  are injection/casing/tubing; it now describes the falling injection / building casing the
+  reviewer actually sees. (Flowing wells, which *do* display downhole pressure, unchanged.)
+- **Economic Limit reads the current rate, not the pre-collapse plateau.** The displayed
+  rate is now the recent trailing producing rate (matching the chart), a `below_established_
+  trend` flag warns when a well is producing under its own trend, and the down-guard keys
+  off a sustained recent rate — so a well at ~half its plateau no longer reads "374 BOPD,
+  19 yr left" next to a high failure signal.
+- **Home "Elevated Risk" can't read 0 while wells are high-risk.** The amber bucket is now
+  an absolute calibrated band (≥50%) of wells not already losing, and surfaces how many
+  high-risk wells are already counted in Impaired — so a low amber count reads as "the
+  high-risk wells are already in the red," not "nothing is at risk."
+- **Shut-in wells route to a Restore queue.** Currently-down wells are pulled out of the
+  Triage Board's priced opportunities into a "Restore First" tier (and excluded from Home's
+  Top Opportunity) — no more $395K "gas-lift optimization" on a well whose own page says
+  "restore production first." View-layer; the certified ranking is untouched.
+- **The Stable tier no longer calls high-risk wells "healthy."** The opportunity signal
+  gained an absolute calibrated-risk floor (≥50%), so 0.5–0.9 wells leave the no-action
+  tier; the "these wells read healthy" caption is gone.
+- **Action Chain degrades to "diagnose first" on an ambiguous mode.** When the classifier
+  finds no dominant signature, the verdict and the diagnosis no longer present the priced
+  intervention as a confident recommendation — it's flagged as contingent on confirming
+  the mode (dyno card / pressure survey) first.
+- **Uplift-horizon assumption is stated where the NPV appears.** The 5-year/0.6-decline
+  uplift tail is generous for a short-scope job (a 1-day gas-lift optimization); the Monte-
+  Carlo note now discloses the horizon instead of just endorsing the figure, with an
+  explicit upper-bound caveat on optimization jobs and a centralized note on Methods.
+
 ## [0.7.2] — 2026-06-15
 
 ### Fixed

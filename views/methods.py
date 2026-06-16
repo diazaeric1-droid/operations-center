@@ -44,36 +44,61 @@ def render() -> None:
         "- **Monte-Carlo** (Action Chain) draws 10,000 trials over the three biggest "
         "uncertainties (incremental rate, uplift decline, realized price); its **base "
         "case** (mean of the inputs) reconciles exactly with the deterministic Net NPV, "
-        "and the P50 sits slightly below it because the NPV distribution is right-skewed.")
+        "and the P50 sits slightly below it because the NPV distribution is right-skewed.\n"
+        "- **Uplift horizon — a stated assumption.** Intervention NPVs book a **5-year** "
+        "uplift tail declining at 0.6/yr. That fits a capital workover (ESP swap, rod-pump "
+        "workover, acid stim) but is **generous for a short-scope job** such as a gas-lift "
+        "optimization (often a 1-day slickline visit). The *relative* ranking is "
+        "unaffected (every well uses the same horizon); treat the *absolute* NPV on "
+        "optimization-type jobs as an upper bound until the horizon is scoped per job "
+        "type. Flagged on the Action Chain where these figures appear.")
 
     pt.section("ESP failure-risk model card")
     ev = _esp_eval()
     if ev:
-        m = st.columns(4)
-        m[0].metric("AUROC (out-of-fold)", f"{ev['auroc_cv_mean']:.3f}",
+        m = st.columns(5)
+        m[0].metric("AUROC (calibrated OOF)", f"{ev['auroc_cv_mean']:.3f}",
                     f"± {ev['auroc_cv_std']:.3f}", delta_color="off")
-        m[1].metric("Brier (OOF)", f"{ev['brier']:.3f}", "lower is better",
+        m[1].metric("Brier (calibrated OOF)", f"{ev['brier']:.3f}", "lower is better",
                     delta_color="off")
         m[2].metric("Precision @ top 10%", f"{ev['precision_at_top10pct']:.0%}",
-                    delta_color="off")
-        m[3].metric("Calibrated", "yes" if ev["calibrated"] else "no",
+                    f"top {ev['n_flagged_top10pct']} wells", delta_color="off")
+        m[3].metric("Recall @ top 10%", f"{ev['recall_at_top10pct']:.0%}",
+                    f"of {ev['n_positives']} impaired", delta_color="off")
+        m[4].metric("Calibrated", "yes" if ev["calibrated"] else "no",
                     f"{ev['n_positives']}/{ev['n_wells']} impaired", delta_color="off")
+        st.caption(
+            "**Precision and recall are a pair — read them together.** Precision@10% is "
+            f"near-100% because on a fleet where {ev['n_positives']}/{ev['n_wells']} wells "
+            "are impaired, the very top of the ranking is almost all true positives — not "
+            "an impressive number on its own. Recall@10% is structurally capped: flagging "
+            f"only the top {ev['n_flagged_top10pct']} wells can recover at most "
+            f"~{ev['n_flagged_top10pct']}/{ev['n_positives']} of the impaired fleet; at the "
+            "quartile cut the board actually flags on, recall is higher (full panel on the "
+            "Triage Board). **AUROC and Brier are END-TO-END calibrated out-of-fold** — "
+            "each CV fold trains the booster AND Platt-calibrates it before scoring the "
+            "held-out wells, exactly as the shipped model does — so the Brier describes the "
+            "calibrated probabilities the console actually displays, not a raw booster.")
     st.markdown(
         "The 30-day failure score is a **Platt-calibrated probability** from an XGBoost "
         "model **trained on the digest fleet itself** — the fleet the console scores — "
         "using the generator's ground-truth fault labels. (Earlier it was trained on a "
         "*different* fleet and scored this one out-of-distribution, so the console only "
         "trusted its fleet-relative ranking; the model is now calibrated on this fleet.) "
-        "The metrics above are **out-of-fold** (stratified CV), so they measure "
-        "generalization, not memorization.\n\n"
-        "**Read the high AUROC honestly:** it is near-perfect because the synthetic "
-        "fault signatures are cleanly separable *by design* — it is an **upper bound on "
-        "clean data, not a real-world claim.** On a real operator's messy historian we "
-        "would expect ~0.85 and treat that drop as the real signal. The displayed "
-        "per-well score is the calibrated probability (slightly optimistic vs the OOF "
-        "metric on the training wells). If the model can't load at all, every well "
-        "falls back to a baseline risk and the Triage Board / Home show a visible "
-        "**degradation banner** rather than a misleading uniform fleet.")
+        "The metrics above are **end-to-end out-of-fold**: each cross-validation fold "
+        "trains the booster *and* fits the Platt calibrator before scoring the held-out "
+        "wells, so they describe the calibrated pipeline the console displays — not a raw "
+        "booster scored without calibration (calibrating in-fold trades a little AUROC for "
+        "an honest Brier; that lower AUROC is the one to trust).\n\n"
+        "**Read the high AUROC honestly:** it is near-perfect because the synthetic fault "
+        "signatures are cleanly separable *by design* — an **upper bound on clean data, "
+        "not a real-world claim.** On a real operator's messy historian (missing days, "
+        "metering noise, comms dropouts) we'd expect a materially lower number, and *that* "
+        "drop — not this synthetic figure — would be the real measure of skill. We don't "
+        "quote a specific real-world AUROC because we have no labeled operator historian to "
+        "measure one on; treat it as an engineering expectation, not a result. If the model "
+        "can't load at all, every well falls back to a baseline risk and the Triage Board / "
+        "Home show a visible **degradation banner** rather than a misleading uniform fleet.")
 
     pt.section("Lift-aware interventions")
     st.markdown(

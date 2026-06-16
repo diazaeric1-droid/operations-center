@@ -250,7 +250,13 @@ def opportunity_signal(frame: "pd.DataFrame") -> "pd.Series":
     deferred = (frame["deferred_bopd"] > 0) if "deferred_bopd" in frame else False
     if "failure_risk_30d" in frame and len(frame):
         thresh = float(frame["failure_risk_30d"].quantile(0.75))
-        elevated = frame["failure_risk_30d"] >= thresh
+        # Fleet-relative quartile OR the absolute calibrated band. The absolute floor
+        # matters on a heavily-impaired fleet, where q75 floats up to ~0.9 and would
+        # otherwise leave 0.5–0.9 wells in the "stable / reads healthy" tier purely for
+        # sitting below the quartile line — now that the score is calibrated, a ≥50%
+        # failure probability is a signal regardless of the fleet's shape.
+        elevated = ((frame["failure_risk_30d"] >= thresh)
+                    | (frame["failure_risk_30d"] >= core.ELEVATED_RISK_ABS_30D))
     else:
         elevated = False
     return deferred | elevated
@@ -287,6 +293,27 @@ def triage_tiers(board: "pd.DataFrame") -> tuple["pd.DataFrame", "pd.DataFrame",
     watch = board[~no_action & signal & ~pos].reset_index(drop=True)
     stable = board[no_action | ~signal].reset_index(drop=True)
     return opportunities, watch, stable
+
+
+@st.cache_data(show_spinner=False)
+def down_well_set(token: str) -> set:
+    """Wells currently down / shut-in on the active SCADA fleet (Restore-tier routing)."""
+    return core.down_wells(fleet_for_token(token))
+
+
+def restore_tier(board: "pd.DataFrame",
+                 down_wells: set) -> tuple["pd.DataFrame", "pd.DataFrame"]:
+    """Split currently-down / shut-in wells out of the ranked board into a RESTORE queue
+    BEFORE the opportunity/watch/stable partition. A shut-in well is a restore-first job,
+    not a priced intervention — leaving it in the board makes it show as a "$X gas-lift
+    opportunity" while its Well 360 says "restore production first" (the two disagreeing).
+    Returns (restore, remaining). Pure display routing — the certified ranking columns are
+    untouched, so rank_fleet parity with pe-pipeline is unaffected."""
+    if board is None or getattr(board, "empty", True) or not down_wells:
+        empty = board.iloc[0:0] if board is not None else board
+        return empty, board
+    mask = board["well_id"].astype(str).isin({str(w) for w in down_wells})
+    return board[mask].reset_index(drop=True), board[~mask].reset_index(drop=True)
 
 
 def loss_badge(source: str) -> tuple[str, str]:

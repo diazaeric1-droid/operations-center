@@ -13,11 +13,16 @@ Validation methodology (read this before quoting a number):
   well's adjacent windows can't straddle train and validation — see README.
 
 - The **shipped** model and the **reported** metrics use the *same* procedure
-  (class-weighted XGBoost + Platt calibration), so the headline number actually
-  describes what's on disk. The shipped raw booster is trained on all data except a
-  stratified calibration hold-out; the calibrator wraps *that* booster (cv='prefit'),
-  so the calibrated probability is a monotone transform of exactly the score Tree
-  SHAP decomposes — explanation and prediction reconcile.
+  (class-weighted XGBoost + Platt calibration) **end to end**. The OOF metrics are NOT
+  the raw booster's — each CV fold trains the booster on a sub-split and Platt-calibrates
+  it on a held-out slice, then scores the test fold with the CALIBRATED pipeline, exactly
+  as ``fit`` builds the shipped artifact. So the OOF **Brier** describes the calibrated
+  probabilities the console actually displays (calibrating in-fold costs a little AUROC
+  vs the raw booster because each fold trains on less data — that lower number is the
+  honest one). The shipped raw booster is trained on all data except a stratified
+  calibration hold-out; the calibrator wraps *that* booster (cv='prefit'), so the
+  calibrated probability is a monotone transform of exactly the score Tree SHAP
+  decomposes — explanation and prediction reconcile.
 """
 from __future__ import annotations
 
@@ -48,12 +53,12 @@ def _prefit_calibrator(estimator, method: str = "sigmoid") -> CalibratedClassifi
 
 @dataclass
 class TrainResult:
-    auroc_cv_mean: float               # out-of-fold AUROC (the number to trust)
+    auroc_cv_mean: float               # calibrated out-of-fold AUROC (the number to trust)
     auroc_cv_std: float
     precision_at_top10pct: float       # OOF: of the top-10% flagged, fraction that fail
     recall_at_top10pct: float          # OOF: of all failures, fraction in the top-10%
     n_flagged_top10pct: int            # how many wells "top 10%" is, on this fleet
-    brier: float                       # OOF Brier score (lower = better calibrated)
+    brier: float                       # calibrated-OOF Brier (describes the shipped probs)
     n_wells: int
     n_positives: int
     calibrated: bool
@@ -101,11 +106,18 @@ class ESPRiskModel:
         return XGBClassifier(**{**self._xgb_kwargs, "scale_pos_weight": scale_pos_weight})
 
     def _cross_validate(self, X: pd.DataFrame, y: pd.Series):
-        """Stratified K-fold producing OOF predictions + per-fold AUROC (mean, std).
+        """Stratified K-fold producing **end-to-end calibrated** OOF predictions +
+        per-fold AUROC (mean, std).
 
-        Returns (auroc_mean, auroc_std, oof_probs) where oof_probs[i] is the
-        prediction for row i from a fold model that did NOT train on it.
-        """
+        Each fold reproduces the shipped procedure: train the booster on a sub-split of
+        the fold's training data, Platt-calibrate it on a held-out slice, then score the
+        held-out test fold with the CALIBRATED pipeline. So oof_probs[i] is the
+        *calibrated* prediction for row i from a model that never saw it, and the Brier
+        computed on these describes the probabilities the console actually shows — not the
+        raw booster. A fold too small to carve out a valid calibration hold-out degrades
+        to the raw booster for that fold (rare on this fleet).
+
+        Returns (auroc_mean, auroc_std, oof_probs)."""
         n_pos = int(y.sum())
         n_splits = max(2, min(5, n_pos))
         skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
@@ -113,15 +125,34 @@ class ESPRiskModel:
         aucs = []
         yv = y.to_numpy()
         for tr, te in skf.split(X, y):
-            m = self._new_xgb(self._pos_weight(y.iloc[tr]))
-            m.fit(X.iloc[tr], y.iloc[tr])
-            p = m.predict_proba(X.iloc[te])[:, 1]
+            p = self._fold_calibrated_proba(X.iloc[tr], y.iloc[tr], X.iloc[te])
             oof[te] = p
             if len(np.unique(yv[te])) > 1:    # AUROC undefined on single-class fold
                 aucs.append(roc_auc_score(yv[te], p))
         mean = float(np.mean(aucs)) if aucs else float("nan")
         std = float(np.std(aucs)) if aucs else float("nan")
         return mean, std, oof
+
+    def _fold_calibrated_proba(self, X_tr: pd.DataFrame, y_tr: pd.Series,
+                               X_te: pd.DataFrame) -> np.ndarray:
+        """Train booster + Platt calibrator within ONE CV fold and return calibrated
+        probabilities for the held-out test fold — the same pipeline ``fit`` ships. Falls
+        back to the raw booster if the fold can't yield a valid (≥2-per-class) calibration
+        hold-out, so a small/degenerate fold degrades gracefully instead of crashing."""
+        try:
+            X_fit, X_cal, y_fit, y_cal = train_test_split(
+                X_tr, y_tr, test_size=0.25, random_state=42, stratify=y_tr)
+            if int(y_cal.sum()) >= 2 and int((1 - y_cal).sum()) >= 2:
+                booster = self._new_xgb(self._pos_weight(y_fit))
+                booster.fit(X_fit, y_fit)
+                cal = _prefit_calibrator(booster, method="sigmoid")
+                cal.fit(X_cal, y_cal)
+                return cal.predict_proba(X_te)[:, 1]
+        except Exception:  # noqa: BLE001 — degrade to raw booster for this fold
+            pass
+        booster = self._new_xgb(self._pos_weight(y_tr))
+        booster.fit(X_tr, y_tr)
+        return booster.predict_proba(X_te)[:, 1]
 
     @staticmethod
     def _precision_recall_at_k(y, p, frac: float = 0.1):
@@ -163,7 +194,10 @@ class ESPRiskModel:
         X = X[self.feature_names]
         y = y.astype(int)
 
-        # 1) Honest generalisation metrics from out-of-fold predictions.
+        # 1) Honest generalisation metrics from END-TO-END calibrated out-of-fold
+        #    predictions (each fold trains + Platt-calibrates exactly as the shipped
+        #    artifact does), so AUROC/precision/recall/Brier describe the calibrated
+        #    pipeline the console displays — not the raw booster.
         cv_mean, cv_std, oof = self._cross_validate(X, y)
         prec, rec, k = self._precision_recall_at_k(y, oof, frac=0.1)
         reliability, brier = self._reliability(y, oof)

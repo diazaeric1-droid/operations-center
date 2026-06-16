@@ -94,10 +94,24 @@ def render() -> None:
     rec_int = (str(brow["recommended_intervention"].iloc[0]) if len(brow)
                else "no_action")
     top_opp = _top_opportunity(board)
+    # The diagnosis (computed once, cached) — needed up here so the verdict can DEGRADE to
+    # "diagnose first" when the failure mode is ambiguous, instead of confidently saying
+    # AUTHORIZE next to a "review before acting" mode below (the well_044 contradiction).
+    diag = c.diagnosis(well_id, price)
+    is_unclear = str(diag.get("suspected_mode", "")).strip().lower().startswith("unclear")
     if rec_int == "no_action":
         st.info(f"**Economic verdict: NO ACTION.** {well_id} is below the action "
                 "thresholds — the chain still runs to show the mechanics, but there "
                 "is nothing to authorize.")
+    elif is_unclear:
+        npv_str = f"${npv:,.0f}" if npv >= 0 else f"−${abs(npv):,.0f}"
+        st.warning(
+            f"**Economic verdict: DIAGNOSE FIRST.** {well_id}'s signature is ambiguous — "
+            "multiple weak signals, no single dominant failure mode — so the chain does "
+            "**not** recommend authorizing a specific intervention yet. The priced "
+            f"{diag['intervention'].replace('_', ' ')} below is what *would* run if the "
+            "mode is confirmed; gather a dynamometer card / pressure survey / recent well "
+            f"work first. (Risked NPV {npv_str} shown for context, not as a go-ahead.)")
     elif npv > 0:
         st.success(f"**Economic verdict: AUTHORIZE.** {well_id}'s recommended "
                    f"intervention is value-accretive — risked NPV **${npv:,.0f}**.")
@@ -141,18 +155,23 @@ def render() -> None:
     pt.section("2 · Predict — ESP Failure-Risk Agent",
                "The stage-2 artifact: an AFE-ready WellDiagnosis (risk score + "
                "failure mode + priced intervention).")
-    diag = c.diagnosis(well_id, price)
     mode_full = str(diag["suspected_mode"]).strip()
     mode_short = mode_full.split("—")[0].strip() or "—"
     m1, m2, m3 = st.columns(3)
     m1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
               help=f"Platt-calibrated probability from the "
                    f"{'ESP' if meta.lift == 'ESP' else 'failure-risk'} model trained on "
-                   "this fleet's labeled faults (out-of-fold AUROC ≈0.99; model card on "
-                   "Methods & Limitations).")
+                   "this fleet's labeled faults (calibrated out-of-fold AUROC ≈0.98; model "
+                   "card on Methods & Limitations).")
     m2.metric("Suspected Mode", mode_short, help=mode_full)
     m3.metric("Intervention", diag["intervention"].replace("_", " "))
     st.caption(diag["primary_diagnosis"])
+    if is_unclear:
+        st.info("⚠️ **Mode is ambiguous — diagnose before acting.** The classifier found "
+                "no single dominant signature, so the mapped intervention below is a "
+                "*contingent* 'what we'd run if confirmed', not a recommendation to "
+                "authorize today. The honest next step is a dynamometer card / pressure "
+                "survey / well-work review to resolve the mode.")
     diag_json = json.dumps(diag, indent=2, default=str)
     with st.expander("WellDiagnosis artifact (JSON)"):
         st.code(diag_json, language="json")
@@ -194,6 +213,12 @@ def render() -> None:
                "**Risked NPV** metric above multiplies the upside by the 30-day "
                "failure signal and nets the certain cost, so Risked NPV ≤ Net NPV "
                "on the same well.")
+    if diag["intervention"] == "gas_lift_optimization":
+        st.caption("⚠️ **Horizon caveat:** this NPV books a 5-year uplift tail, but a "
+                   "gas-lift optimization is typically a 1-day slickline visit — read the "
+                   "absolute NPV as an upper bound (the relative ranking is unaffected; "
+                   "the per-job horizon is a documented limitation, see Methods → "
+                   "Economics).")
     c.pinned_pv10_caption()
 
     # ---- Monte-Carlo economics: the distributional view a capital review expects ---
@@ -213,11 +238,13 @@ def render() -> None:
         mcs[3].metric("P(payout < 24 mo)", f"{mc['prob_payout']:.0%}")
         _tornado_chart(mc)
         theme.source_note(
-            f"{mc['n_trials']:,} trials, net-to-operator at the deck price/NRI (PV10). "
-            "The **base case** (mean of the inputs) equals the AFE's deterministic Net "
-            "NPV above; the P50 sits slightly below it because the NPV distribution is "
-            "right-skewed. The tornado shows each variable's NPV swing when moved to its "
-            "P10/P90 with the others held at base — where the risk to this AFE lives.")
+            f"{mc['n_trials']:,} trials, net-to-operator at the deck price/NRI (PV10), "
+            "over a **5-year uplift horizon** (declining 0.6/yr — generous for a "
+            "short-scope optimization job; see Methods → Economics). The **base case** "
+            "(mean of the inputs) reconciles with the AFE's deterministic Net NPV above "
+            "by construction; the P50 sits slightly below it because the NPV distribution "
+            "is right-skewed. The tornado shows each variable's NPV swing when moved to "
+            "its P10/P90 with the others held at base — where the risk to this AFE lives.")
 
     theme.source_note(
         "Engineering math is deterministic at every hop; economics use the deck oil "

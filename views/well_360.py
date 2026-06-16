@@ -125,9 +125,9 @@ def render() -> None:
     r1, r2, r3 = st.columns(3)
     r1.metric("30-Day Failure Signal", f"{diag['esp_risk_score']:.0%}",
               help=f"A Platt-calibrated probability from the {model_name} trained on this "
-                   "fleet's labeled faults (out-of-fold AUROC ≈0.99 — high because the "
-                   "synthetic signatures are cleanly separable, not a real-world claim). "
-                   "Full model card on Methods & Limitations.")
+                   "fleet's labeled faults (calibrated out-of-fold AUROC ≈0.98 — high "
+                   "because the synthetic signatures are cleanly separable, not a "
+                   "real-world claim). Full model card on Methods & Limitations.")
     r2.metric("Suspected Mode", diag["suspected_mode"].split("—")[0].strip() or "—",
               help=diag["suspected_mode"])
     r3.metric("Recommended Intervention", diag["intervention"].replace("_", " "))
@@ -158,10 +158,22 @@ def render() -> None:
                   f"{el['q_now_bopd']:,.0f} BOPD now", delta_color="off")
         e3.metric("Net margin", f"${el['net_margin_per_bbl']:,.0f}/bbl",
                   help="Realized price × NRI − variable opex.")
-        st.caption(f"Assumes ${el['loe_per_month']:,.0f}/well-month fixed LOE and the "
-                   f"well's established-trend decline ({el['annual_decline_pct']:,.0f}%/yr) "
-                   "— the same decline the type-curve overlay above uses. "
-                   "Illustrative carrying cost — set per asset in a real deployment.")
+        if el.get("below_established_trend"):
+            st.warning(
+                f"**Producing below its established trend** — ~{el['q_now_bopd']:,.0f} "
+                f"BOPD now vs ~{el.get('q_trend_bopd', el['q_now_bopd']):,.0f} on the "
+                "prior 30-day plateau. Remaining life is computed from this **current "
+                "(depressed) rate**, so it already reflects today's reduced deliverability "
+                "— but it projects forward on the gentler **established-trend** decline, "
+                "not the steeper recent drop. If the acute decline continues instead of "
+                "reverting to trend, the true remaining life is **shorter** than shown. "
+                "Read it alongside the failure signal above — a long-run reserves "
+                "baseline, not a verdict on the active problem.")
+        st.caption(f"Current rate is the recent trailing producing rate; assumes "
+                   f"${el['loe_per_month']:,.0f}/well-month fixed LOE and the well's "
+                   f"established-trend decline ({el['annual_decline_pct']:,.0f}%/yr) — the "
+                   "same decline the type-curve overlay above uses. Illustrative carrying "
+                   "cost — set per asset in a real deployment.")
 
     # ---- well work history ------------------------------------------------------
     pt.section("Well History — Interventions",

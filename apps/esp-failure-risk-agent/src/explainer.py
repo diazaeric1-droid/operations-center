@@ -132,9 +132,14 @@ def _phrase_mode(cond: str, lift: str | None, v: dict[str, float]) -> tuple[str,
                     f"pump intake at {v['intake_mean']:.0f} psi, trending {v['intake_slope']:+.1f} psi/d; "
                     "set a gas anchor and adjust pump fillage.")
         if lift == "Gas lift":
+            # A gas-lift well's DISPLAYED channels are injection / casing / tubing — it
+            # has no ESP intake gauge, so cite the symptom on the channels the reviewer
+            # actually sees (injection falling, casing building) rather than the hidden
+            # intake-pressure feature that drives the classifier.
             return ("Gas interference — unstable lift",
-                    f"flowing pressure at {v['intake_mean']:.0f} psi, trending {v['intake_slope']:+.1f} psi/d; "
-                    "review lift-gas injection rate and valve performance.")
+                    "lift-gas delivery destabilizing — injection rate is falling and "
+                    "casing pressure building on the channels above; review lift-gas "
+                    "injection rate and valve performance.")
         return ("Pressure decline / liquid loading",
                 f"flowing bottomhole pressure at {v['intake_mean']:.0f} psi, trending "
                 f"{v['intake_slope']:+.1f} psi/d; evaluate stimulation or an artificial-lift conversion.")

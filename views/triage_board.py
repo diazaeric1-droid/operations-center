@@ -42,15 +42,20 @@ def render() -> None:
                    f"baseline {core.BASELINE_RISK_30D:.0%} failure risk, so this "
                    "ranking reflects deferred production only, not the failure signal. "
                    "Re-run bootstrap or check the model artifact / dependencies.")
-    opportunities, watch, stable = c.triage_tiers(board)
+    # Pull currently-down / shut-in wells into a Restore queue BEFORE the triage
+    # partition — a shut-in well is a restore-first job, not a priced opportunity (its
+    # Well 360 says as much). View-layer only; the certified ranking is untouched.
+    restore, board_live = c.restore_tier(board, c.down_well_set(c.DISK_TOKEN))
+    opportunities, watch, stable = c.triage_tiers(board_live)
 
     pt.kpi_row([
         {"label": "Fleet Size", "value": f"{len(board)} wells"},
         {"label": "Opportunities", "value": f"{len(opportunities)}",
-         "help": "Wells with a real trigger (deferring production OR elevated "
-                 "fleet-relative risk) whose recommended, LIFT-APPROPRIATE intervention "
-                 "clears its own cost today (positive risk-weighted NPV). A cheap "
-                 "intervention that merely pencils on a no-signal well is not enough."},
+         "help": "Wells with a real trigger (deferring production, the fleet's top-quartile "
+                 "risk, OR ≥50% calibrated failure probability) whose recommended, "
+                 "LIFT-APPROPRIATE intervention clears its own cost today (positive "
+                 "risk-weighted NPV). A cheap intervention that merely pencils on a "
+                 "no-signal well is not enough."},
         {"label": "At-Risk Watch", "value": f"{len(watch)}",
          "delta_color": "off",
          "help": "Wells with a trigger (deferring production or elevated risk) where "
@@ -65,12 +70,31 @@ def render() -> None:
 
     _ranking_scorecard(board)
 
+    if not restore.empty:
+        pt.section("Restore First — Wells Down",
+                   f"{len(restore)} well(s) producing ≈0 right now. A shut-in well is a "
+                   "restore-production job, not a priced intervention — these are held "
+                   "OUT of the opportunity ranking below (you can't 'optimize gas lift' "
+                   "on a well that's offline). Bring them back, then they re-rank.")
+        rt = pd.DataFrame({
+            "Well": [f"★ {w}" if h else w
+                     for w, h in zip(restore["well_id"], restore["hero"])],
+            "Field": restore["basin"] + " · " + restore["formation"],
+            "Lift": restore["lift"],
+            "30-Day Risk Signal": restore["failure_risk_30d"].map(lambda x: f"{x:.0%}"),
+            "Status": "down — restore production first",
+        })
+        st.dataframe(rt, width="stretch", hide_index=True)
+        st.caption("Currently down (≈0 production vs the well's own baseline). The "
+                   "economic limit and any priced intervention recompute off the "
+                   "recovered rate once the well is back online — see Well 360.")
+
     pt.section("Top Opportunities — Value-Accretive Interventions",
-               "Wells with a real trigger (deferring production or elevated "
-               "fleet-relative risk) whose LIFT-APPROPRIATE intervention clears its "
-               "cost today (positive risk-weighted NPV). A well off this list isn't "
-               "necessarily healthy — it may be on the At-Risk Watch List below, where "
-               "intervening now would lose money.")
+               "Wells with a real trigger (deferring production, the fleet's top-quartile "
+               "risk, or ≥50% calibrated failure probability) whose LIFT-APPROPRIATE "
+               "intervention clears its cost today (positive risk-weighted NPV). A well "
+               "off this list isn't necessarily healthy — it may be on the At-Risk Watch "
+               "List below, where intervening now would lose money.")
     if opportunities.empty:
         pt.empty_state(
             "No value-accretive interventions on the fleet right now.",
@@ -145,16 +169,17 @@ def render() -> None:
         })
         st.dataframe(wt, width="stretch", hide_index=True)
         st.caption("'30-Day Risk Signal' is a Platt-calibrated probability from the "
-                   "ESP model trained on this fleet's labeled faults (out-of-fold "
-                   "AUROC ≈0.99 on clean synthetic signatures — see Methods). "
+                   "ESP model trained on this fleet's labeled faults (calibrated "
+                   "out-of-fold AUROC ≈0.98 on clean synthetic signatures — see Methods). "
                    "'Indicated If It Fails' is the intervention that would be run if "
                    "the well deteriorates — it is NOT a recommendation to act today.")
 
     pt.section("No-Action Tier — Stable Wells",
-               f"{len(stable)} wells with no trigger to act — not deferring production "
-               "and not in the fleet's elevated-risk quartile — so there's nothing to "
-               "do today even where a cheap intervention would technically pencil. "
-               "Listed for completeness (full fleet coverage, not just the exceptions).")
+               f"{len(stable)} wells with no trigger to act — not deferring production, "
+               "not in the fleet's top-quartile risk, and below the "
+               f"{int(core.ELEVATED_RISK_ABS_30D * 100)}% calibrated-risk floor — so "
+               "there's nothing to do today even where a cheap intervention would "
+               "technically pencil. Listed for completeness (full fleet coverage).")
     if stable.empty:
         st.caption("No wells in the stable tier on this run.")
     else:
@@ -168,10 +193,11 @@ def render() -> None:
             "Status": "stable — no action",
         })
         st.dataframe(sd, width="stretch", hide_index=True, height=360)
-        st.caption("No trigger to act: not deferring production and not in the fleet's "
-                   "elevated-risk quartile. Their calibrated ESP score is low (these "
-                   "wells read healthy), so it is not shown here to avoid implying a "
-                   "healthy well is about to fail.")
+        st.caption("No trigger to act: not deferring production, below the fleet's "
+                   "top-quartile risk cut, AND below the "
+                   f"{int(core.ELEVATED_RISK_ABS_30D * 100)}% calibrated-risk floor. This "
+                   "is a 'nothing to do today' tier, not a clean bill of health — open any "
+                   "well on Well 360 for its specific 30-day signal.")
 
     raw = c.board_with_deferred(price, nri)  # display frame (real deferred joined in)
     st.download_button("Download triage board (CSV)", data=raw.to_csv(index=False),
