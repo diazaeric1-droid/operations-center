@@ -1,0 +1,152 @@
+"""Loss Accounting · Note Search (RAG) — semantic search over operator notes.
+
+The keyword reason-code classifier (Causes & Pareto) answers "what bucket is
+this note?". This page answers the questions a keyword match can't: it embeds
+every operator note into a pgvector index and retrieves by *meaning*, then has
+Claude synthesize a cited answer (BYOK; a deterministic extractive rollup runs
+without a key).
+
+Stack on display: LlamaIndex + pgvector + local fastembed embeddings + Claude.
+The feature is fully optional — if the RAG extras (requirements-rag.txt) or the
+vector DB are absent, the page explains how to bring them up and stops cleanly,
+so the core console is never coupled to this heavier retrieval stack.
+"""
+from __future__ import annotations
+
+import streamlit as st
+
+import product_theme as pt
+import theme
+
+from views import _common as c
+
+_CAUSES = [
+    "(any cause)", "artificial_lift", "surface_facility", "power",
+    "gathering_thirdparty", "wellbore", "planned", "weather", "reservoir",
+]
+_EXAMPLES = [
+    "slow ESP failure, gradual underload rather than an instant trip",
+    "freeze-offs that lasted more than a couple of days",
+    "midstream curtailment where they cut our gas takeaway",
+    "separator or treater emulsion upsets",
+]
+
+
+@st.cache_resource(show_spinner="Loading the embedding model…")
+def _engine():
+    """One engine per process (loads the fastembed model once)."""
+    from rag.engine import NoteSearchEngine
+    return NoteSearchEngine()
+
+
+def render() -> None:
+    c.ensure_state()
+
+    pt.masthead("ops", "Note Search (RAG)",
+                "Ask the operator-note log in plain language. Semantic retrieval "
+                "over a pgvector index, with a cited, LLM-narrated answer.")
+
+    # --- guard: optional extras + the vector DB ------------------------------
+    from rag.engine import deps_available
+    from rag import store
+
+    ok, fix = deps_available()
+    if not ok:
+        pt.section("Extended install required")
+        st.info(
+            "Semantic search needs the optional RAG extras (kept out of the core "
+            "app to keep it light). From the repo root:\n\n"
+            "```bash\npip install -r requirements-rag.txt\n```")
+        st.caption(f"Missing: `{fix}`")
+        return
+
+    db_ok, detail = store.ping()
+    if not db_ok:
+        pt.section("Vector database unavailable")
+        st.warning(
+            "The pgvector store isn't reachable. Bring up the local one:\n\n"
+            "```bash\ndocker compose -f docker-compose.rag.yml up -d\n```\n\n"
+            "Or point `OPS_PG_DSN` at your Postgres+pgvector (e.g. AWS RDS).")
+        st.caption(f"Tried: `{detail}`")
+        return
+
+    eng = _engine()
+    n_indexed = eng.index_size()
+
+    pt.context_bar([
+        ("Vector store", f"pgvector · {detail}"),
+        ("Embeddings", "fastembed BAAI/bge-small (local, 384-d)"),
+        ("Synthesis", "Claude (BYOK)" if st.session_state.get("anthropic_key")
+         else "extractive (no key)"),
+        ("Indexed notes", f"{n_indexed:,}"),
+    ])
+
+    # --- index lifecycle -----------------------------------------------------
+    if n_indexed == 0:
+        pt.section("Build the index")
+        st.write("The operator-note corpus isn't embedded yet. Build it once "
+                 "(~10s); it persists in pgvector across restarts.")
+        if st.button("Build index", type="primary"):
+            with st.spinner("Embedding the operator-note corpus into pgvector…"):
+                eng.reset_table()
+                cnt = eng.build_index()
+            st.success(f"Indexed {cnt:,} operator notes.")
+            st.rerun()
+        return
+
+    # --- query ---------------------------------------------------------------
+    pt.section("Ask the note log")
+    q = st.text_input(
+        "Question or description", key="rag_query",
+        placeholder=_EXAMPLES[0],
+        help="Plain language — retrieval is by meaning, not keywords.")
+    cols = st.columns([3, 1, 1])
+    with cols[0]:
+        st.caption("Try: " + " · ".join(f"*{e}*" for e in _EXAMPLES[:3]))
+    with cols[1]:
+        cause = st.selectbox("Filter cause", _CAUSES, index=0)
+    with cols[2]:
+        top_k = st.slider("Results", 3, 12, 6)
+
+    with st.expander("Rebuild index (re-embed the corpus)"):
+        if st.button("Rebuild from scratch"):
+            with st.spinner("Re-embedding…"):
+                eng.reset_table()
+                cnt = eng.build_index()
+            st.success(f"Re-indexed {cnt:,} notes.")
+            st.rerun()
+
+    if not q:
+        pt.empty_state("Enter a question above to search the operator-note log.")
+        theme.references(["deferment"])
+        return
+
+    cause_arg = None if cause == _CAUSES[0] else cause
+    with st.spinner("Retrieving + synthesizing…"):
+        ans = eng.answer(q, top_k=top_k, cause=cause_arg,
+                         anthropic_key=st.session_state.get("anthropic_key"))
+
+    pt.section("Answer")
+    if ans.used_llm:
+        st.markdown(ans.text)
+        st.caption("Synthesized by Claude from the retrieved notes only, with "
+                   "[n] citations into the table below.")
+    else:
+        st.code(ans.text, language=None)
+        st.caption("Deterministic extractive rollup (no API key). Add an "
+                   "Anthropic key in the sidebar for a narrated, cited answer.")
+
+    pt.section("Retrieved notes", "Ranked by semantic similarity to the query.")
+    if ans.sources:
+        import pandas as pd
+        df = pd.DataFrame([{
+            "#": i, "Score": h.score, "Well": h.well_id, "Cause": h.cause,
+            "Start": h.start_date, "Days": h.duration_days,
+            "Deferred bbl": h.deferred_bbl, "Operator Note": h.note,
+        } for i, h in enumerate(ans.sources, 1)])
+        st.dataframe(df, width="stretch", hide_index=True)
+        theme.source_note(
+            "Notes embedded with BAAI/bge-small-en-v1.5 (local), retrieved from a "
+            "pgvector index by cosine similarity; the LLM answer is grounded ONLY "
+            "in these rows. Corpus = the synthetic reason-coded event log.")
+    theme.references(["deferment"])

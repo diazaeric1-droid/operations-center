@@ -1,0 +1,64 @@
+# pgvector as a StatefulSet — stable network id + persistent volume for the
+# vector index. Headless Service gives the app a stable DNS name to dial:
+#   pgvector-0.pgvector.ops-center.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgvector
+  namespace: ops-center
+  labels: { app: pgvector }
+spec:
+  clusterIP: None          # headless — addresses the pod directly
+  selector: { app: pgvector }
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pgvector
+  namespace: ops-center
+spec:
+  serviceName: pgvector
+  replicas: 1
+  selector:
+    matchLabels: { app: pgvector }
+  template:
+    metadata:
+      labels: { app: pgvector }
+    spec:
+      containers:
+        - name: pgvector
+          image: pgvector/pgvector:pg16
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - { name: POSTGRES_USER, value: ops }
+            - { name: POSTGRES_PASSWORD, value: ops }
+            - { name: POSTGRES_DB, value: opsrag }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "ops", "-d", "opsrag"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "ops", "-d", "opsrag"] }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

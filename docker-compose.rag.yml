@@ -1,0 +1,26 @@
+# Local pgvector for the RAG note-search feature.
+#   docker compose -f docker-compose.rag.yml up -d
+# Brings up Postgres 16 + the pgvector extension on localhost:5433 with the
+# credentials the rag/ default DSN expects (postgresql://ops:ops@localhost:5433/opsrag).
+# This is the SAME interface the code uses against AWS RDS in the cloud — only
+# OPS_PG_DSN changes. Data persists in the named volume across restarts.
+services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: ops-rag-pgvector
+    environment:
+      POSTGRES_USER: ops
+      POSTGRES_PASSWORD: ops
+      POSTGRES_DB: opsrag
+    ports:
+      - "5433:5432"
+    volumes:
+      - ops_rag_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ops -d opsrag"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ops_rag_pgdata:

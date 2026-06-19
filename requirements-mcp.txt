@@ -1,0 +1,5 @@
+# MCP server extras (Phase 2). Layers on top of requirements-rag.txt.
+#   pip install -r requirements-rag.txt -r requirements-mcp.txt
+# Exposes the operator-note retriever as Model Context Protocol tools so any MCP
+# client (Claude Desktop, an agent runtime) can query the vector index directly.
+mcp>=1.2.0
