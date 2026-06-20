@@ -1,0 +1,5 @@
+# Optional agentic-RAG extra: the LangGraph self-correcting flow (langgraph_rag/)
+# over the existing RAG backend. Builds on requirements-rag.txt (it wraps the same
+# NoteSearchEngine). Pure-Python and light; never imported by the deployed app.
+#   pip install -r requirements-rag.txt -r requirements-langgraph.txt
+langgraph>=0.2

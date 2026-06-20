@@ -108,6 +108,17 @@ def render() -> None:
     with cols[2]:
         top_k = st.slider("Results", 3, 12, 6)
 
+    from langgraph_rag.graph import deps_available as _lg_deps
+    lg_ok = _lg_deps()[0]
+    agentic = st.checkbox(
+        "Self-correcting (agentic) — grade retrieval & rewrite weak queries",
+        value=False, disabled=not lg_ok,
+        help=("Runs a LangGraph loop: retrieve → grade relevance → if weak, "
+              "rewrite the query and retry (max 2) → synthesize. The trace shows "
+              "each step." if lg_ok else
+              "Install the optional extra to enable: "
+              "pip install -r requirements-langgraph.txt"))
+
     with st.expander("Rebuild index (re-embed the corpus)"):
         if st.button("Rebuild from scratch"):
             with st.spinner("Re-embedding…"):
@@ -122,9 +133,30 @@ def render() -> None:
         return
 
     cause_arg = None if cause == _CAUSES[0] else cause
-    with st.spinner("Retrieving + synthesizing…"):
-        ans = eng.answer(q, top_k=top_k, cause=cause_arg,
-                         anthropic_key=st.session_state.get("anthropic_key"))
+    key = st.session_state.get("anthropic_key")
+    trace = None
+    if agentic and lg_ok:
+        from langgraph_rag.graph import run as lg_run
+        from rag.engine import Answer, RetrievedNote
+        with st.spinner("Agentic RAG: retrieve → grade → rewrite → synthesize…"):
+            final = lg_run(q, cause=cause_arg, top_k=top_k, anthropic_key=key,
+                           max_iterations=2, engine=eng)
+        ans = Answer(final["answer"], final["used_llm"],
+                     [RetrievedNote(**n) for n in final["notes"]])
+        trace = final["trace"]
+    else:
+        with st.spinner("Retrieving + synthesizing…"):
+            ans = eng.answer(q, top_k=top_k, cause=cause_arg, anthropic_key=key)
+
+    if trace:
+        n_rw = sum(t.startswith("rewrite") for t in trace)
+        with st.expander(f"🔁 Self-correction trace — {len(trace)} steps · "
+                         f"{n_rw} rewrite(s)", expanded=True):
+            for t in trace:
+                st.markdown(f"- {t}")
+            st.caption("LangGraph state machine: retrieve → grade → (rewrite → "
+                       "retrieve)* → generate. Rewrites fire only when the top "
+                       "retrieval score is below the relevance bar.")
 
     pt.section("Answer")
     if ans.used_llm:

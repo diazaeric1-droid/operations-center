@@ -168,6 +168,16 @@ class NoteSearchEngine:
                model: str = "claude-sonnet-4-6") -> Answer:
         """Retrieve, then synthesize a cited answer (LLM if key, else extractive)."""
         hits = self.retrieve(query, top_k=top_k, cause=cause)
+        return self.synthesize(query, hits, anthropic_key=anthropic_key, model=model)
+
+    def synthesize(self, query: str, hits: list, anthropic_key: str | None = None,
+                   model: str = "claude-sonnet-4-6") -> Answer:
+        """Synthesize a cited answer from ALREADY-retrieved hits.
+
+        Split out from answer() so an agentic flow (langgraph_rag/) can retrieve,
+        grade, and re-query across several rounds, then synthesize once over the
+        final evidence — without re-running retrieval here.
+        """
         if not hits:
             return Answer("No operator notes matched that query.", False, [])
         if anthropic_key:
