@@ -45,6 +45,25 @@ def test_model_routing_runs_each_step_on_its_provider():
     assert any(t.startswith("polish   [stub") for t in final["trace"])
 
 
+def test_eval_harness_passes_good_answers():
+    from examples.eval_harness import run_eval
+    results = run_eval(["stub"])               # stub gives domain-correct answers
+    assert all(r["passed"] for r in results["stub"])
+
+
+def test_eval_harness_catches_domain_hallucination():
+    """The must_avoid check flags the groundwater answer a generalist model gave."""
+    from examples.eval_harness import run_eval
+
+    def groundwater(provider, q):              # the real failure, reproduced
+        return ("The well makes more water because rainfall recharges the aquifer "
+                "and raises the water table.")
+    rows = run_eval(["x"], answer_fn=groundwater)["x"]
+    water = next(r for r in rows if r["id"] == "water_increase")
+    assert not water["passed"]                 # the eval FAILS it automatically
+    assert water["violations"]                 # …on banned domain terms
+
+
 @needs_lg
 def test_supervisor_dispatches_to_the_right_specialist():
     """The supervisor routes each question to the matching specialist agent."""
