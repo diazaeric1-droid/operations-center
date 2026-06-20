@@ -43,12 +43,12 @@ PROVIDERS: dict[str, Provider] = {
     "claude": Provider(
         "claude", "anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-6",
         None, "Anthropic — coding / agentic strength"),
-    # gemini-2.0-flash is the non-"thinking" Flash: it returns the full answer
-    # within a normal token budget. (gemini-2.5-flash spends tokens "thinking"
-    # first, so a small max_tokens truncates the visible reply — use a large
-    # max_tokens or disable thinking if you switch to it.)
+    # gemini-2.5-flash is Google's current FREE-tier Flash (gemini-2.0-flash now
+    # returns quota "limit: 0" on new free keys — it's off the free tier). 2.5 is
+    # a "thinking" model: it spends tokens reasoning before answering, so chat()
+    # uses a generous default max_tokens to leave room for the visible reply.
     "gemini": Provider(
-        "gemini", "openai", "GEMINI_API_KEY", "gemini-2.0-flash",
+        "gemini", "openai", "GEMINI_API_KEY", "gemini-2.5-flash",
         "https://generativelanguage.googleapis.com/v1beta/openai/",
         "Google AI Studio free tier (Flash)"),
     "groq": Provider(
@@ -82,7 +82,7 @@ def first_available() -> Optional[str]:
 
 
 def chat(prompt: str, provider: str = "claude", model: Optional[str] = None,
-         system: Optional[str] = None, max_tokens: int = 300,
+         system: Optional[str] = None, max_tokens: int = 1024,
          temperature: float = 0.0) -> str:
     """Send one prompt to `provider`, return the text reply.
 

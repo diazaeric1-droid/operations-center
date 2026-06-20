@@ -43,7 +43,9 @@ def call_model(instruction: str, provider: str) -> str:
     if provider == "stub":
         return _stub(instruction)
     from langgraph_rag.providers import chat        # the model-agnostic layer
-    return chat(instruction, provider=provider, max_tokens=120)
+    # generous max_tokens: "thinking" models (e.g. gemini-2.5-flash) spend tokens
+    # reasoning before the visible answer, so a tight cap truncates the reply.
+    return chat(instruction, provider=provider, max_tokens=1024)
 
 
 def _stub(instruction: str) -> str:
