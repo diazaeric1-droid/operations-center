@@ -321,74 +321,16 @@ def _well_charts(df, meta, win: int) -> None:
 # ---- Early Warning · deep anomaly detection (optional torch) ------------------
 # An LSTM autoencoder (dl/) trained ONLY on healthy wells; reconstruction error on
 # each well's latest window is the anomaly score. It catches the slow, multivariate
-# drift the single-channel rate-drop alarm is blind to. torch is an OPTIONAL extra:
-# this tab degrades to a readable install/train prompt when it (or the trained
-# model) is absent, so the deployed app is never coupled to the DL stack.
-from pathlib import Path as _Path  # noqa: E402
-
-_DL_ART = _Path(__file__).resolve().parent.parent / "dl" / "artifacts"
-_CH_LABEL = {
-    "bopd": "oil rate", "bfpd": "fluid rate", "intake_pressure_psi": "intake pressure",
-    "motor_temp_f": "motor temp", "motor_amps": "motor amps", "runtime_pct": "runtime",
-    "current_imbalance_pct": "current imbalance", "drive_freq_hz": "drive freq",
-    "gas_mcfd": "gas rate",
-}
-_ALARM_Z = 3.5   # |robust-z| the rate-drop alarm needs to fire (illustrative)
-
-
-@st.cache_resource(show_spinner=False)
-def _load_ew_model():
-    """Load the trained autoencoder once per process (cached)."""
-    import torch
-    from dl import model as dl_model
-    ckpt = torch.load(_DL_ART / "autoencoder.pt", weights_only=False)
-    cfg = ckpt["config"]
-    m = dl_model.build_model(len(cfg["channels"]), hidden=cfg["hidden"],
-                             latent=cfg["latent"], num_layers=cfg["num_layers"])
-    m.load_state_dict(ckpt["state_dict"])
-    m.eval()
-    return m, ckpt
+# drift the single-channel rate-drop alarm is blind to. The scoring lives in
+# dl/score.py (shared with the Morning Brief); torch is an OPTIONAL extra, so this
+# tab degrades to a readable install/train prompt when it (or the model) is absent.
 
 
 @st.cache_data(show_spinner=False)
-def _score_fleet(token: str) -> pd.DataFrame:
-    """Score every well's latest window by reconstruction error + name the channel
-    driving it, and compute the rate-drop alarm's verdict for contrast."""
-    import sys
-    import torch
-    m, ckpt = _load_ew_model()
-    cfg = ckpt["config"]
-    chans, L = cfg["channels"], cfg["length"]
-    mean = np.asarray(ckpt["mean"], dtype=float)
-    std = np.asarray(ckpt["std"], dtype=float)
-    std[std < 1e-9] = 1.0
-
-    digest_src = _Path(__file__).resolve().parent.parent / "apps" \
-        / "daily-production-digest" / "src"
-    if str(digest_src) not in sys.path:
-        sys.path.insert(0, str(digest_src))
-    from anomaly_detector import robust_z
-
-    fleet = c.fleet_for_token(token)
-    rows = []
-    for wid, df in fleet.items():
-        if df is None or not set(chans).issubset(df.columns) or len(df) < L:
-            continue
-        w = df[chans].to_numpy(dtype=float)[-L:]            # latest (L, C) window
-        xn = (w - mean) / std
-        with torch.no_grad():
-            recon = m(torch.tensor(xn[None], dtype=torch.float32)).numpy()[0]
-        err = (recon - xn) ** 2                              # (L, C)
-        per_ch = err.mean(axis=0)
-        zmax = max(abs(robust_z(w[:, j])) for j in range(len(chans)))
-        rows.append({"well": str(wid), "score": float(err.mean()),
-                     "driver": _CH_LABEL.get(chans[int(np.argmax(per_ch))],
-                                             chans[int(np.argmax(per_ch))]),
-                     "maxz": float(zmax)})
-    out = pd.DataFrame(rows)
-    if out.empty:
-        return out
-    return out.sort_values("score", ascending=False).reset_index(drop=True)
+def ew_scored(token: str) -> pd.DataFrame:
+    """Cached fleet scoring (flagged/alarm/deep_only columns) for the active token."""
+    from dl import score as dl_score
+    return dl_score.flag_table(dl_score.score_fleet_latest(c.fleet_for_token(token)))
 
 
 def _early_warning(fleet: dict) -> None:
@@ -397,17 +339,12 @@ def _early_warning(fleet: dict) -> None:
                "how far its latest behaviour drifts from 'normal' — catching the slow, "
                "multivariate degradation the single-channel rate-drop alarm misses.")
 
-    # --- optional-dependency + trained-model guards --------------------------
-    try:
-        from dl import model as dl_model
-    except Exception:  # noqa: BLE001
-        st.info("The deep-learning detector isn't available in this install.")
-        return
+    from dl import model as dl_model, score as dl_score
     if not dl_model.torch_available():
         st.info("This tab needs the optional deep-learning extras:\n\n"
                 "```bash\npip install -r requirements-dl.txt\n```")
         return
-    if not (_DL_ART / "autoencoder.pt").exists():
+    if not dl_score.model_ready():
         st.warning("The detector isn't trained yet — train it once (~30s):\n\n"
                    "```bash\npython -m dl.train\n```")
         return
@@ -415,7 +352,7 @@ def _early_warning(fleet: dict) -> None:
     # backtest credibility line (from the committed eval, if present)
     import json
     try:
-        ev = json.loads((_DL_ART / "eval_report.json").read_text())
+        ev = json.loads((dl_score.ARTIFACTS / "eval_report.json").read_text())
         pt.context_bar([
             ("Detector", "LSTM autoencoder (unsupervised)"),
             ("Backtest PR-AUC", f"{ev['autoencoder']['pr_auc']:.2f} "
@@ -431,24 +368,20 @@ def _early_warning(fleet: dict) -> None:
         return
 
     with st.spinner("Scoring the fleet with the autoencoder…"):
-        df = _score_fleet(c.scada_token())
+        df = ew_scored(c.scada_token())
     if df.empty:
         pt.empty_state("No wells with a full window to score.")
         return
 
-    cut = float(np.percentile(df["score"], 85))      # top ~15% = early-warning tier
-    df["flagged"] = df["score"] >= cut
-    df["alarm"] = df["maxz"] >= _ALARM_Z
-    deep_only = df[df["flagged"] & ~df["alarm"]]
-
+    deep_only = df[df["deep_only"]]
     pt.kpi_row([
         {"label": "Wells Scored", "value": f"{len(df)}"},
         {"label": "Early-Warning Flags", "value": f"{int(df['flagged'].sum())}",
-         "help": f"Wells in the top 15% by drift score (≥ {cut:.3f} recon error)."},
+         "help": "Wells in the top 15% by drift score."},
         {"label": "Deep-Only Catches", "value": f"{len(deep_only)}",
          "delta": "missed by the rate-drop alarm", "delta_color": "inverse",
-         "help": "Flagged by the autoencoder but BELOW the rate-drop alarm's "
-                 f"|z|≥{_ALARM_Z} threshold — the slow drift the point alarm can't see."},
+         "help": f"Flagged by the autoencoder but below the rate-drop alarm's "
+                 f"|z|≥{dl_score.ALARM_Z} threshold — slow drift the point alarm can't see."},
     ])
 
     pt.section("Fleet Drift Leaderboard", "Top wells by reconstruction error — the "
@@ -457,8 +390,7 @@ def _early_warning(fleet: dict) -> None:
     top = df.head(15).iloc[::-1]
     fig = go.Figure(go.Bar(
         x=top["score"], y=top["well"], orientation="h",
-        marker_color=[theme.RED if (f and not a) else theme.BLUE
-                      for f, a in zip(top["flagged"], top["alarm"])],
+        marker_color=[theme.RED if d else theme.BLUE for d in top["deep_only"]],
         text=[f"{d}" for d in top["driver"]], textposition="outside",
         hovertext=[f"drift {s:.3f} · max|z| {z:.1f} · driver: {d}"
                    for s, z, d in zip(top["score"], top["maxz"], top["driver"])],
@@ -475,10 +407,9 @@ def _early_warning(fleet: dict) -> None:
         .rename(columns={"well": "Well", "driver": "Top drifting channel"}),
         width="stretch", hide_index=True)
     theme.source_note(
-        "Drift score = mean reconstruction error of the well's latest "
-        f"{_load_ew_model()[1]['config']['length']}-day window through an LSTM "
-        "autoencoder trained on healthy wells only; the top drifting channel is the "
-        "one with the largest reconstruction error. The rate-drop alarm column is the "
-        "shipped robust median/MAD z-score (|z| ≥ "
-        f"{_ALARM_Z}). Thresholds (top-15% flag, alarm |z|) are illustrative. "
-        "Backtest detail on **Methods & Limitations** and in dl/README.md.")
+        "Drift score = mean reconstruction error of the well's latest window through "
+        "an LSTM autoencoder trained on healthy wells only; the top drifting channel "
+        "is the one with the largest reconstruction error. The rate-drop alarm column "
+        f"is the shipped robust median/MAD z-score (|z| ≥ {dl_score.ALARM_Z}). "
+        "Thresholds (top-15% flag, alarm |z|) are illustrative. Backtest detail on "
+        "**Methods & Limitations** and in dl/README.md.")

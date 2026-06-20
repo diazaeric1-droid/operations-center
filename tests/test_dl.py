@@ -49,6 +49,28 @@ def test_dataset_is_reproducible(bootstrapped):
 
 
 # --- model + training (needs torch) -------------------------------------------
+def test_flag_table_marks_deep_only():
+    """deep_only = top-drift AND the rate-drop alarm stayed silent."""
+    import pandas as pd
+    from dl import score as dl_score
+    df = pd.DataFrame({
+        "well": ["a", "b", "c", "d"],
+        "score": [10.0, 1.0, 0.9, 0.8],   # 'a' drifts most
+        "driver": ["x", "y", "z", "w"],
+        "maxz": [1.0, 9.0, 1.0, 1.0],     # 'a' low z -> alarm silent
+    })
+    out = dl_score.flag_table(df, pct=75.0, alarm_z=3.5)
+    a = out[out.well == "a"].iloc[0]
+    assert a["flagged"] and not a["alarm"] and a["deep_only"]
+    # 'b' is not in the top drift tier -> not flagged -> not a deep-only catch
+    assert not out[out.well == "b"].iloc[0]["deep_only"]
+
+
+def test_model_ready_returns_bool():
+    from dl import score as dl_score
+    assert isinstance(dl_score.model_ready(), bool)
+
+
 @needs_torch
 def test_model_forward_shape():
     m = model_mod.build_model(n_channels=9, hidden=16, latent=8)
