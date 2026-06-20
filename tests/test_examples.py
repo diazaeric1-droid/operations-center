@@ -116,6 +116,57 @@ def test_multisample_reports_pass_rate_for_a_flaky_model():
     assert sep["pass_rate"] == 0.5 and sep["passed"] is False and sep["n_runs"] == 2
 
 
+def test_eval_separates_infra_errors_from_quality_failures():
+    from examples.eval_harness import run_eval
+
+    def boom(provider, q):
+        raise RuntimeError("429 rate limited")    # run_case catches -> "[ERROR: ...]"
+    rows = run_eval(["x"], answer_fn=boom, n_runs=2)["x"]
+    for r in rows:
+        assert r["errors"] == 2                    # both runs errored
+        assert r["pass_rate"] is None              # quality is unknown, NOT 0%
+        assert r["passed"] is False
+    # a real model failure (groundwater) is still a quality failure, not an error
+    bad = run_eval(["x"], answer_fn=lambda p, q: "rainfall recharges the aquifer")["x"]
+    water = next(r for r in bad if r["id"] == "water_increase")
+    assert water["errors"] == 0 and water["pass_rate"] == 0.0
+
+
+def test_eval_partial_error_does_not_dilute_quality_score():
+    """One run errors, the other passes -> pass_rate over SURVIVORS (1.0), not 0.5."""
+    import itertools
+    from examples.eval_harness import run_eval
+    seq = itertools.cycle(["__boom__", "the liquid level is high"])
+
+    def flaky(provider, q):
+        v = next(seq)
+        if v == "__boom__":
+            raise RuntimeError("429 rate limited")
+        return v
+    sep = next(r for r in run_eval(["x"], answer_fn=flaky, n_runs=2,
+                                   judge="stub")["x"]
+               if r["id"] == "separator_highlevel")
+    assert sep["errors"] == 1 and sep["pass_rate"] == 1.0   # 429 didn't count as failure
+    assert sep["judge_attempts"] == 1                        # errored run not judged
+
+
+def test_report_distinguishes_infra_from_quality(capsys):
+    from examples.eval_harness import run_eval, report
+    results = {
+        "down": run_eval(["x"], answer_fn=_raise_boom)["x"],           # all errored
+        "wrong": run_eval(["x"], answer_fn=lambda p, q: "rainfall aquifer")["x"],  # quality fail
+    }
+    report(results)
+    out = capsys.readouterr().out
+    assert "—" in out                       # all-errored provider shows — not 0%
+    assert "NOT a model quality failure" in out and "⚠" in out
+    assert "✗" in out and "pass-rate" in out
+
+
+def _raise_boom(provider, q):
+    raise RuntimeError("429 rate limited")
+
+
 def test_argv_rejects_flag_without_value():
     import pytest as _pt
     from examples.eval_harness import _parse_argv, self_judging

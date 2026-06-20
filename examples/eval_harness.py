@@ -136,15 +136,20 @@ def _has_term(text: str, term: str) -> bool:
     return re.search(rf"\b{re.escape(term)}\b", text) is not None
 
 
-def score_case(case: dict, answer: str, latency: float) -> dict:
+def score_case(case: dict, answer: str, latency: float,
+               errored: Optional[bool] = None) -> dict:
+    # infra failure = the answer_fn RAISED (run_case passes that ground truth).
+    # Fall back to the text prefix only for direct callers that don't pass it.
+    if errored is None:
+        errored = answer.startswith("[ERROR:")
     a = answer.lower()
     inc = [k for k in case["must_include"] if _has_term(a, k)]
     coverage = len(inc) / max(len(case["must_include"]), 1)
     violations = [k for k in case["must_avoid"] if _has_term(a, k)]
     len_ok = len(answer) <= case["max_chars"]
-    passed = coverage >= 0.5 and not violations and len_ok
+    passed = (not errored) and coverage >= 0.5 and not violations and len_ok
     return {"id": case["id"], "passed": passed, "coverage": coverage,
-            "violations": violations, "len_ok": len_ok,
+            "violations": violations, "len_ok": len_ok, "errored": errored,
             "chars": len(answer), "latency": round(latency, 2), "answer": answer}
 
 
@@ -161,12 +166,13 @@ def run_case(case: dict, provider: str, answer_fn: Callable[[str, str], str],
     runs = []
     for _ in range(max(1, n_runs)):
         t = time.time()
+        raised = False
         try:
             ans = answer_fn(provider, case["q"])
-        except Exception as e:  # a provider erroring IS a result
-            ans = f"[ERROR: {type(e).__name__}: {e}]"
-        s = score_case(case, ans, time.time() - t)
-        if judge_provider:
+        except Exception as e:  # a provider erroring IS a result (infra, not quality)
+            ans, raised = f"[ERROR: {type(e).__name__}: {e}]", True
+        s = score_case(case, ans, time.time() - t, errored=raised)
+        if judge_provider and not s["errored"]:   # don't waste the judge on error rows
             try:
                 j = judge_answer(judge_provider, case["q"], ans)
             except Exception as e:  # noqa: BLE001
@@ -175,21 +181,24 @@ def run_case(case: dict, provider: str, answer_fn: Callable[[str, str], str],
         runs.append(s)
 
     n = len(runs)
+    ok = [r for r in runs if not r["errored"]]    # runs we can actually score for quality
     lats = [r["latency"] for r in runs]
     agg = {
-        "id": case["id"], "n_runs": n,
-        "pass_rate": sum(r["passed"] for r in runs) / n,
-        "passed": all(r["passed"] for r in runs),          # back-compat: all-pass
-        "coverage": sum(r["coverage"] for r in runs) / n,
-        "violations": sorted({v for r in runs for v in r["violations"]}),
+        "id": case["id"], "n_runs": n, "errors": n - len(ok),
+        # quality metrics ignore errored runs — a 429 is not a wrong answer.
+        # pass_rate is None when ALL runs errored (couldn't evaluate quality at all).
+        "pass_rate": (sum(r["passed"] for r in ok) / len(ok)) if ok else None,
+        "passed": bool(ok) and all(r["passed"] for r in ok),
+        "coverage": (sum(r["coverage"] for r in ok) / len(ok)) if ok else 0.0,
+        "violations": sorted({v for r in ok for v in r["violations"]}),
         "avg_latency": round(sum(lats) / n, 2),
         "p95_latency": round(_percentile(lats, 0.95), 2),
         "answer": runs[-1]["answer"], "runs": runs,
     }
     if judge_provider:
         js = [r["judge_score"] for r in runs if r.get("judge_score") is not None]
-        agg["judge_graded"] = len(js)          # how many runs the judge actually graded
-        agg["judge_attempts"] = n
+        agg["judge_graded"] = len(js)             # how many runs the judge actually graded
+        agg["judge_attempts"] = len(ok)           # only non-error runs are sent to the judge
         agg["judge_score"] = round(sum(js) / len(js), 2) if js else None
     return agg
 
@@ -218,18 +227,20 @@ def run_eval(providers: list[str],
 
 def report(results: dict, judge: Optional[str] = None) -> None:
     has_judge = judge is not None
-    head = f"\n{'provider':12s} {'pass-rate':>10s} {'avg cov':>8s} {'viol':>5s}"
+    head = f"\n{'provider':12s} {'pass-rate':>10s} {'avg cov':>8s} {'viol':>5s} {'err':>4s}"
     head += f" {'judge':>9s}" if has_judge else ""
     head += f" {'p95 lat':>8s}"
     print(head)
-    print("  " + "-" * (66 if has_judge else 54))
+    print("  " + "-" * (72 if has_judge else 60))
     for prov, rows in results.items():
-        n = len(rows)
-        pr = sum(r["pass_rate"] for r in rows) / n
-        cov = sum(r["coverage"] for r in rows) / n
+        scored = [r for r in rows if r["pass_rate"] is not None]   # drop all-errored cases
+        prs = [r["pass_rate"] for r in scored]
+        pr_str = f"{sum(prs) / len(prs):9.0%}" if prs else f"{'—':>9s}"
+        cov = sum(r["coverage"] for r in scored) / len(scored) if scored else 0.0
         viol = sum(len(r["violations"]) for r in rows)
+        errs = sum(r.get("errors", 0) for r in rows)
         p95 = max(r["p95_latency"] for r in rows)
-        line = f"{prov:12s} {pr:9.0%} {cov:8.0%} {viol:5d}"
+        line = f"{prov:12s} {pr_str} {cov:8.0%} {viol:5d} {errs:4d}"
         if has_judge:
             js = [r["judge_score"] for r in rows if r.get("judge_score") is not None]
             graded = sum(r.get("judge_graded", 0) for r in rows)
@@ -240,16 +251,23 @@ def report(results: dict, judge: Optional[str] = None) -> None:
         line += f" {p95:7.2f}s"
         print(line)
 
-    # surface the actual failures — the whole point of an eval is to SEE them
+    # surface failures, distinguishing INFRA errors (⚠) from QUALITY failures (✗)
     print()
     for prov, rows in results.items():
         for r in rows:
-            if r["pass_rate"] < 1.0:
+            if r["pass_rate"] is None:
+                print(f"  ⚠ {prov}/{r['id']}: {r['errors']}/{r['n_runs']} runs ERRORED "
+                      "(infrastructure, e.g. rate-limit — NOT a model quality failure)")
+                print(f"      “{r['answer'][:90]}…”")
+            elif r["pass_rate"] < 1.0:
                 why = (f"avoided-term {r['violations']}" if r["violations"]
                        else "missing required term" if r["coverage"] < 0.5
                        else "too long")
                 print(f"  ✗ {prov}/{r['id']}: pass-rate {r['pass_rate']:.0%} ({why})")
                 print(f"      “{r['answer'][:90]}…”")
+            elif r.get("errors", 0):   # some runs errored but the survivors all passed
+                print(f"  · {prov}/{r['id']}: {r['errors']}/{r['n_runs']} runs errored "
+                      f"(infra); pass-rate over the {r['n_runs'] - r['errors']} survivor(s)")
 
 
 def _parse_argv(argv: list[str]):

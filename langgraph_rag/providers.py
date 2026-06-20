@@ -22,8 +22,35 @@ tier except OpenAI direct:
 from __future__ import annotations
 
 import os
+import random
+import time
 from dataclasses import dataclass
 from typing import Optional
+
+def _is_transient(e: Exception) -> bool:
+    """A transient error worth retrying: 429 rate-limit, ANY 5xx (incl. 504 gateway
+    timeout and Cloudflare 520-524), or a connection/timeout error (which carries no
+    status_code, so we match by SDK class name)."""
+    status = getattr(e, "status_code", None)
+    if status is not None and (status == 429 or 500 <= status < 600):
+        return True
+    name = type(e).__name__
+    return any(k in name for k in
+               ("RateLimit", "Overload", "APITimeout", "APIConnection"))
+
+
+def _call_with_retry(make_call, attempts: int = 3, base: float = 0.8):
+    """Call an SDK function with exponential backoff + jitter on transient errors.
+    Re-raises a non-transient error immediately and the last error after `attempts`.
+    The resilience real LLM systems need — a single 429/504 shouldn't fail the run."""
+    attempts = max(1, attempts)                  # always make at least one attempt
+    for i in range(attempts):
+        try:
+            return make_call()
+        except Exception as e:  # noqa: BLE001 — classify, then retry or re-raise
+            if not _is_transient(e) or i == attempts - 1:
+                raise
+            time.sleep(base * (2 ** i) + random.uniform(0, 0.4))
 
 
 @dataclass(frozen=True)
@@ -118,7 +145,8 @@ def chat_meta(prompt: str, provider: str = "claude", model: Optional[str] = None
                   "messages": [{"role": "user", "content": prompt}]}
         if system:
             kwargs["system"] = system
-        msg = anthropic.Anthropic(api_key=key).messages.create(**kwargs)
+        client = anthropic.Anthropic(api_key=key)
+        msg = _call_with_retry(lambda: client.messages.create(**kwargs))
         text = "".join(b.text for b in msg.content if b.type == "text").strip()
         u = getattr(msg, "usage", None)
         pt = getattr(u, "input_tokens", None)
@@ -128,9 +156,9 @@ def chat_meta(prompt: str, provider: str = "claude", model: Optional[str] = None
         client = OpenAI(api_key=key, base_url=p.base_url)
         messages = ([{"role": "system", "content": system}] if system else []) + \
             [{"role": "user", "content": prompt}]
-        resp = client.chat.completions.create(
+        resp = _call_with_retry(lambda: client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens,
-            temperature=temperature)
+            temperature=temperature))
         text = (resp.choices[0].message.content or "").strip()
         u = getattr(resp, "usage", None)
         pt = getattr(u, "prompt_tokens", None)

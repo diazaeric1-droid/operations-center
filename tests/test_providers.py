@@ -58,3 +58,90 @@ def test_resolve_tokens_real_partial_and_estimated():
     # partial usage -> the REAL count is preserved and NOT flagged estimated
     pt, ct, pe, ce = _resolve_tokens(200, None, "x", "hello world")
     assert pt == 200 and pe is False and ce is True
+
+
+def test_call_with_retry_retries_transient_then_succeeds():
+    from langgraph_rag.providers import _call_with_retry
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise RateLimit("rate limited")
+        return "ok"
+
+    assert _call_with_retry(flaky, attempts=3, base=0.0) == "ok"
+    assert calls["n"] == 2                       # retried once, then succeeded
+
+
+def test_call_with_retry_reraises_non_transient_immediately():
+    from langgraph_rag.providers import _call_with_retry
+    calls = {"n": 0}
+
+    def bad():
+        calls["n"] += 1
+        raise ValueError("400 bad request")      # not transient -> no retry
+
+    with pytest.raises(ValueError):
+        _call_with_retry(bad, attempts=3, base=0.0)
+    assert calls["n"] == 1
+
+
+def test_call_with_retry_persistent_transient_reraises_after_attempts():
+    from langgraph_rag.providers import _call_with_retry
+
+    class RateLimit(Exception):
+        status_code = 429
+
+    calls = {"n": 0}
+
+    def always_429():
+        calls["n"] += 1
+        raise RateLimit("rate limited")
+
+    with pytest.raises(RateLimit):
+        _call_with_retry(always_429, attempts=3, base=0.0)
+    assert calls["n"] == 3                         # tried exactly `attempts` times, then raised
+
+
+def test_is_transient_covers_5xx_and_name_based():
+    from langgraph_rag.providers import _is_transient
+
+    def err(name, status=None):
+        e = type(name, (Exception,), {})()
+        if status is not None:
+            e.status_code = status
+        return e
+
+    # 504 gateway timeout / Cloudflare 520 / 408 — all 5xx-ish transient now
+    assert _is_transient(err("InternalServerError", 504))
+    assert _is_transient(err("APIStatusError", 520))
+    assert _is_transient(err("RateLimitError", 429))
+    # connection/timeout carry NO status_code -> matched by class name
+    assert _is_transient(err("APITimeoutError"))
+    assert _is_transient(err("APIConnectionError"))
+    # hard errors are NOT transient
+    assert not _is_transient(err("BadRequestError", 400))
+    assert not _is_transient(err("AuthenticationError", 401))
+
+
+def test_call_with_retry_retries_name_based_timeout():
+    from langgraph_rag.providers import _call_with_retry
+
+    class APITimeoutError(Exception):           # no status_code — name branch only
+        pass
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise APITimeoutError("timed out")
+        return "ok"
+
+    assert _call_with_retry(flaky, attempts=3, base=0.0) == "ok"
+    assert calls["n"] == 2
