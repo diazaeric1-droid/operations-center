@@ -1,22 +1,50 @@
 """Evals — measure LLM answer quality instead of eyeballing it.
 
 "Build evals/testing frameworks for LLM systems" shows up in most AI-engineer
-JDs. This is the simplest honest version: a fixed test set, assertion-based
-scoring (must-include terms, must-AVOID terms, length), and per-provider latency
-— run the SAME eval across every model and get a comparison table.
+JDs. This harness combines the three building blocks a real one uses:
 
-It catches real failures automatically. The `must_avoid` groundwater terms below
-would have flagged the wrong "aquifer recharge / rainfall" answer a generalist
-model gave to an oil-well question — the exact bug we hit by hand.
+  1. ASSERTION checks  — must-include / must-AVOID terms (word-boundary matched)
+                         + length. Exact and cheap.
+  2. LLM-as-JUDGE      — a model grades each answer 1–5 on a rubric (quality the
+                         assertions can't see). The judge is blind to which
+                         provider wrote the answer (removes *label* bias).
+  3. MULTI-SAMPLING    — run each case N times at temperature>0 and report a PASS
+                         RATE, so a model that's wrong 1-in-3 can't look perfect
+                         by being asked once.
 
-    python examples/eval_harness.py            # eval every provider whose key is set
-    python examples/eval_harness.py groq gemini  # only these
+Run the same eval across every provider for an apples-to-apples table:
 
-Runs key-free against a deterministic stub so the harness itself is testable.
+    python examples/eval_harness.py                       # every provider w/ a key
+    python examples/eval_harness.py groq gemini --runs 3  # 3 samples each
+    python examples/eval_harness.py groq --runs 3 --judge gemini --temp 0.7
+
+LIMITATIONS (an eval is only as honest as its disclosure):
+  * It's a 3-case SMOKE SET — illustrative, not statistically meaningful.
+  * The judge is UNVALIDATED against human ground truth, and a SINGLE judge can
+    self-prefer (favor its own family's style) even when blind to labels — so
+    the judge column is indicative, not authoritative. Use a judge from a
+    different model family than the system under test (the harness warns if you
+    judge a provider with itself).
+  * Assertion term-matching is word-boundary but still approximate.
+  * Temperature trade-off: --temp 0 is reproducible but makes multi-sampling
+    only catch transient API errors, not model nondeterminism; the default 0.7
+    lets --runs surface real flakiness.
+
+OBSERVED (a real run, documented as a teaching case): on "why might an oil well
+produce more water?", Groq repeatedly answered with *groundwater/"water table"*
+framing — pass-rate 0% on the must_avoid check — yet Gemini-as-judge scored it
+~5/5. The hard assertion caught a domain hallucination the LLM judge missed.
+That disagreement is the whole reason to run assertions AND a judge: neither
+alone is sufficient.
+
+Runs key-free against a deterministic stub (model AND judge) so it's testable.
+NOTE: free tiers rate-limit (~15–30 req/min) — runs × cases × providers (× judge)
+adds up; keep --runs small on free keys.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from typing import Callable, Optional
@@ -24,9 +52,8 @@ from typing import Callable, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 SYSTEM = "You are an oil & gas operations assistant. Answer in 1–2 sentences."
+DEFAULT_TEMP = 0.7   # >0 so multi-sampling can actually surface model flakiness
 
-# Each case: the question, terms the answer SHOULD contain, terms it must NOT
-# (domain hallucinations), and a length cap. Assertion-based — no judge needed.
 EVAL_SET = [
     {"id": "esp_underload",
      "q": "Why does an ESP pump trip on underload?",
@@ -47,11 +74,12 @@ EVAL_SET = [
 
 
 # --- the system under test: a model call (swap in any answer_fn) --------------
-def model_answer(provider: str, question: str) -> str:
+def model_answer(provider: str, question: str, temperature: float = DEFAULT_TEMP) -> str:
     if provider == "stub":
         return _stub(question)
     from langgraph_rag.providers import chat
-    return chat(question, provider=provider, system=SYSTEM, max_tokens=1024)
+    return chat(question, provider=provider, system=SYSTEM, max_tokens=1024,
+                temperature=temperature)
 
 
 def _stub(question: str) -> str:
@@ -68,12 +96,51 @@ def pick_all_available() -> list[str]:
     return [name for name, ok in available().items() if ok] or ["stub"]
 
 
-# --- scoring ------------------------------------------------------------------
+# --- LLM-as-judge -------------------------------------------------------------
+JUDGE_SYSTEM = (
+    "You are a strict petroleum-engineering grader. Score how well the ANSWER "
+    "answers the QUESTION, from 1 (wrong or irrelevant) to 5 (correct, relevant, "
+    "concise). A confident but WRONG answer (e.g. groundwater/rainfall for an "
+    "oil-well question) scores 1. Reply EXACTLY:  SCORE: <1-5> | REASON: <short>")
+
+
+def judge_answer(judge_provider: str, question: str, answer: str) -> dict:
+    if judge_provider == "stub":
+        return _stub_judge(answer)
+    from langgraph_rag.providers import chat
+    raw = chat(f"QUESTION: {question}\nANSWER: {answer}", provider=judge_provider,
+               system=JUDGE_SYSTEM, max_tokens=1024)
+    return _parse_judge(raw)
+
+
+def _parse_judge(raw: str) -> dict:
+    """Parse 'SCORE: n | REASON: ...' robustly. Case-insensitive; never raises;
+    score is None when unparseable or out of 1–5 (None != a default 3)."""
+    m = re.search(r"SCORE:\s*([1-5])\b", raw, re.I)
+    score = int(m.group(1)) if m else None
+    rm = re.split(r"REASON:", raw, maxsplit=1, flags=re.I)
+    reason = (rm[1] if len(rm) > 1 else raw).strip()[:140]
+    return {"score": score, "reason": reason}
+
+
+def _stub_judge(answer: str) -> dict:
+    a = answer.lower()
+    bad = any(t in a for t in ("rainfall", "aquifer", "groundwater", "water table"))
+    return {"score": 1 if bad else 4,
+            "reason": "stub: domain hallucination" if bad else "stub: on-domain"}
+
+
+# --- assertion scoring (one run) ----------------------------------------------
+def _has_term(text: str, term: str) -> bool:
+    """Word-boundary match (so 'level' doesn't match 'levelheaded')."""
+    return re.search(rf"\b{re.escape(term)}\b", text) is not None
+
+
 def score_case(case: dict, answer: str, latency: float) -> dict:
     a = answer.lower()
-    inc = [k for k in case["must_include"] if k in a]
+    inc = [k for k in case["must_include"] if _has_term(a, k)]
     coverage = len(inc) / max(len(case["must_include"]), 1)
-    violations = [k for k in case["must_avoid"] if k in a]
+    violations = [k for k in case["must_avoid"] if _has_term(a, k)]
     len_ok = len(answer) <= case["max_chars"]
     passed = coverage >= 0.5 and not violations and len_ok
     return {"id": case["id"], "passed": passed, "coverage": coverage,
@@ -81,47 +148,138 @@ def score_case(case: dict, answer: str, latency: float) -> dict:
             "chars": len(answer), "latency": round(latency, 2), "answer": answer}
 
 
-def run_eval(providers: list[str],
-             answer_fn: Callable[[str, str], str] = model_answer) -> dict:
-    """{provider: [case score, ...]} — the same eval set on every provider."""
-    out: dict[str, list[dict]] = {}
-    for prov in providers:
-        rows = []
-        for case in EVAL_SET:
-            t = time.time()
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    return s[min(len(s) - 1, int(round(p * (len(s) - 1))))]
+
+
+# --- one case, N samples, optional judge --------------------------------------
+def run_case(case: dict, provider: str, answer_fn: Callable[[str, str], str],
+             judge_provider: Optional[str], n_runs: int) -> dict:
+    runs = []
+    for _ in range(max(1, n_runs)):
+        t = time.time()
+        try:
+            ans = answer_fn(provider, case["q"])
+        except Exception as e:  # a provider erroring IS a result
+            ans = f"[ERROR: {type(e).__name__}: {e}]"
+        s = score_case(case, ans, time.time() - t)
+        if judge_provider:
             try:
-                ans = answer_fn(prov, case["q"])
-            except Exception as e:  # a provider erroring is itself a result
-                ans = f"[ERROR: {type(e).__name__}]"
-            rows.append(score_case(case, ans, time.time() - t))
-        out[prov] = rows
-    return out
+                j = judge_answer(judge_provider, case["q"], ans)
+            except Exception as e:  # noqa: BLE001
+                j = {"score": None, "reason": f"judge error: {type(e).__name__}"}
+            s["judge_score"], s["judge_reason"] = j["score"], j["reason"]
+        runs.append(s)
+
+    n = len(runs)
+    lats = [r["latency"] for r in runs]
+    agg = {
+        "id": case["id"], "n_runs": n,
+        "pass_rate": sum(r["passed"] for r in runs) / n,
+        "passed": all(r["passed"] for r in runs),          # back-compat: all-pass
+        "coverage": sum(r["coverage"] for r in runs) / n,
+        "violations": sorted({v for r in runs for v in r["violations"]}),
+        "avg_latency": round(sum(lats) / n, 2),
+        "p95_latency": round(_percentile(lats, 0.95), 2),
+        "answer": runs[-1]["answer"], "runs": runs,
+    }
+    if judge_provider:
+        js = [r["judge_score"] for r in runs if r.get("judge_score") is not None]
+        agg["judge_graded"] = len(js)          # how many runs the judge actually graded
+        agg["judge_attempts"] = n
+        agg["judge_score"] = round(sum(js) / len(js), 2) if js else None
+    return agg
 
 
-def report(results: dict) -> None:
-    print(f"\n{'provider':12s} {'pass':>7s} {'avg cov':>8s} "
-          f"{'violations':>11s} {'avg lat':>8s}")
-    print("  " + "-" * 50)
+def self_judging(providers: list[str], judge: Optional[str]) -> bool:
+    """True when the judge is also one of the graded providers (self-preference risk)."""
+    return bool(judge) and judge in providers
+
+
+def run_eval(providers: list[str],
+             answer_fn: Optional[Callable[[str, str], str]] = None,
+             n_runs: int = 1, judge: Optional[str] = None,
+             temperature: float = DEFAULT_TEMP) -> dict:
+    """{provider: [case aggregate, ...]} — the same eval set on every provider.
+
+    Each row carries id/passed/coverage/violations/pass_rate plus latency stats
+    (and judge_score/judge_graded when judge is set). n_runs>1 reports a pass RATE
+    per case; judge=<provider> adds a 1–5 LLM-as-judge score. answer_fn defaults to
+    model_answer at `temperature`; pass your own (provider, question)->str to eval
+    an agent instead.
+    """
+    fn = answer_fn or (lambda p, q: model_answer(p, q, temperature))
+    return {prov: [run_case(c, prov, fn, judge, n_runs) for c in EVAL_SET]
+            for prov in providers}
+
+
+def report(results: dict, judge: Optional[str] = None) -> None:
+    has_judge = judge is not None
+    head = f"\n{'provider':12s} {'pass-rate':>10s} {'avg cov':>8s} {'viol':>5s}"
+    head += f" {'judge':>9s}" if has_judge else ""
+    head += f" {'p95 lat':>8s}"
+    print(head)
+    print("  " + "-" * (66 if has_judge else 54))
     for prov, rows in results.items():
         n = len(rows)
-        passed = sum(r["passed"] for r in rows)
+        pr = sum(r["pass_rate"] for r in rows) / n
         cov = sum(r["coverage"] for r in rows) / n
         viol = sum(len(r["violations"]) for r in rows)
-        lat = sum(r["latency"] for r in rows) / n
-        print(f"{prov:12s} {passed}/{n:<5d} {cov:7.0%} {viol:>11d} {lat:7.2f}s")
-    # surface the actual failures — the point of an eval is to SEE them
+        p95 = max(r["p95_latency"] for r in rows)
+        line = f"{prov:12s} {pr:9.0%} {cov:8.0%} {viol:5d}"
+        if has_judge:
+            js = [r["judge_score"] for r in rows if r.get("judge_score") is not None]
+            graded = sum(r.get("judge_graded", 0) for r in rows)
+            attempts = sum(r.get("judge_attempts", 0) for r in rows)
+            # surface judge COVERAGE so a 1-of-N parsed score can't masquerade clean
+            line += (f" {sum(js) / len(js):4.1f}({graded}/{attempts})" if js
+                     else f" {'n/a':>9s}")
+        line += f" {p95:7.2f}s"
+        print(line)
+
+    # surface the actual failures — the whole point of an eval is to SEE them
     print()
     for prov, rows in results.items():
         for r in rows:
-            if not r["passed"]:
+            if r["pass_rate"] < 1.0:
                 why = (f"avoided-term {r['violations']}" if r["violations"]
                        else "missing required term" if r["coverage"] < 0.5
                        else "too long")
-                print(f"  ✗ {prov}/{r['id']}: {why}")
+                print(f"  ✗ {prov}/{r['id']}: pass-rate {r['pass_rate']:.0%} ({why})")
                 print(f"      “{r['answer'][:90]}…”")
 
 
+def _parse_argv(argv: list[str]):
+    judge, runs, temp, provs = None, 1, DEFAULT_TEMP, []
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--judge", "--runs", "--temp"):
+            if i + 1 >= len(argv):
+                raise SystemExit(f"{argv[i]} requires a value")
+            val = argv[i + 1]
+            if argv[i] == "--judge":
+                judge = val
+            elif argv[i] == "--runs":
+                runs = int(val)
+            else:
+                temp = float(val)
+            i += 2
+        else:
+            provs.append(argv[i]); i += 1
+    return provs, runs, judge, temp
+
+
 if __name__ == "__main__":
-    providers = sys.argv[1:] or pick_all_available()
-    print(f"Eval set: {len(EVAL_SET)} cases · providers: {', '.join(providers)}")
-    report(run_eval(providers))
+    provs, runs, judge, temp = _parse_argv(sys.argv[1:])
+    providers = provs or pick_all_available()
+    if self_judging(providers, judge):
+        print(f"⚠ self-judging: {judge} grades its own answers — self-preference "
+              f"bias likely; prefer a judge from a different model family.")
+    print(f"Eval set: {len(EVAL_SET)} cases × {runs} run(s) @ temp {temp} · "
+          f"providers: {', '.join(providers)}"
+          + (f" · judge: {judge}" if judge else ""))
+    report(run_eval(providers, n_runs=runs, judge=judge, temperature=temp),
+           judge=judge)

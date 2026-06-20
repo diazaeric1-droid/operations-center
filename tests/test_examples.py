@@ -64,6 +64,67 @@ def test_eval_harness_catches_domain_hallucination():
     assert water["violations"]                 # …on banned domain terms
 
 
+# --- eval harness: judge + multi-sample + parsing (review regressions) --------
+def test_parse_judge_robust_to_casing_and_garbage():
+    from examples.eval_harness import _parse_judge
+    # lowercase 'reason:' must NOT crash (the HIGH-severity review bug)
+    assert _parse_judge("SCORE: 5 | reason: correct") == {"score": 5, "reason": "correct"}
+    assert _parse_judge("score: 4 | Reason: ok")["score"] == 4
+    assert _parse_judge("SCORE: 7 | REASON: x")["score"] is None   # out of 1–5
+    assert _parse_judge("no score at all")["score"] is None        # unparseable -> None
+    assert _parse_judge("SCORE: 3")["reason"]                      # reason falls back
+
+
+def test_stub_judge_scores_hallucination_low():
+    from examples.eval_harness import judge_answer
+    assert judge_answer("stub", "q", "rainfall recharges the aquifer")["score"] == 1
+    assert judge_answer("stub", "q", "the reservoir depletes")["score"] == 4
+
+
+def test_run_eval_with_stub_judge_reports_scores_and_coverage():
+    from examples.eval_harness import run_eval
+    rows = run_eval(["stub"], judge="stub")["stub"]
+    for r in rows:
+        assert isinstance(r["judge_score"], (int, float))
+        assert r["judge_graded"] == r["judge_attempts"]   # all runs graded by stub
+
+
+def test_word_boundary_matching_no_substring_collision():
+    from examples.eval_harness import score_case
+    case = {"id": "x", "must_include": ["level"], "must_avoid": [], "max_chars": 400}
+    # 'levelheaded' must NOT satisfy the required term 'level'
+    assert not score_case(case, "stay levelheaded today", 0.0)["passed"]
+    assert score_case(case, "the liquid level is high", 0.0)["passed"]
+
+
+def test_percentile_edges():
+    from examples.eval_harness import _percentile
+    assert _percentile([], 0.95) == 0.0
+    assert _percentile([7.0], 0.95) == 7.0
+    assert _percentile([1.0, 2.0], 0.95) == 2.0
+
+
+def test_multisample_reports_pass_rate_for_a_flaky_model():
+    import itertools
+    from examples.eval_harness import run_eval
+    # alternate pass/fail every call; run_eval calls this for all 3 cases × 2 runs,
+    # so each case sees [pass, fail] -> a 0.5 pass-rate (multi-sampling's whole point)
+    seq = itertools.cycle(["the liquid level is high",   # passes separator case
+                           "stay levelheaded, unrelated"])  # fails (no 'level' word)
+    rows = run_eval(["x"], answer_fn=lambda p, q: next(seq), n_runs=2)["x"]
+    sep = next(r for r in rows if r["id"] == "separator_highlevel")
+    assert sep["pass_rate"] == 0.5 and sep["passed"] is False and sep["n_runs"] == 2
+
+
+def test_argv_rejects_flag_without_value():
+    import pytest as _pt
+    from examples.eval_harness import _parse_argv, self_judging
+    with _pt.raises(SystemExit):
+        _parse_argv(["groq", "--judge"])
+    assert self_judging(["groq", "gemini"], "groq") is True
+    assert self_judging(["groq"], "gemini") is False
+
+
 @needs_lg
 def test_supervisor_dispatches_to_the_right_specialist():
     """The supervisor routes each question to the matching specialist agent."""
