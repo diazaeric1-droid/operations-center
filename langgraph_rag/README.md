@@ -69,6 +69,29 @@ pytest tests/test_langgraph_rag.py    # grading logic always; graph flow needs l
 The graph tests drive a **fake engine** with scripted retrieval scores, so the
 cycle / routing / max-iteration guard are verified without a vector DB or a key.
 
+## Second flow — `approval_agent.py` (the patterns reference)
+
+A heavily-commented intervention-approval agent built to demonstrate the four
+LangGraph capabilities an AI-engineer role expects, each isolated and runnable:
+
+| Capability | Where in the agent |
+|---|---|
+| **Branch** | `route_after_assess` → one of four next nodes on state |
+| **Cycle** | `gather → assess` loop to enrich missing inputs (capped) |
+| **Durable persistence** | compiled with `SqliteSaver` — paused state is written to disk |
+| **Human-in-the-loop** | `human_review` calls `interrupt()`; resume with `Command(resume=…)` |
+
+```bash
+python -m langgraph_rag.approval_agent
+```
+
+The demo runs all four: auto-approve, auto-reject, the gather→re-assess cycle,
+and — the headline — a costly job that **pauses for a human, survives a simulated
+process restart** (a fresh graph rebuilt from the same sqlite file is still
+paused), then resumes from disk with the reviewer's decision. That "wait days,
+survive a restart, resume" property is the thing prompt chains fundamentally
+can't do, and the one to be able to speak to in an interview.
+
 ## Design notes
 
 - The package is `langgraph_rag`, **not** `langgraph` — a top-level `langgraph/`

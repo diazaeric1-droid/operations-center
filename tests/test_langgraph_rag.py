@@ -87,3 +87,77 @@ def test_graph_respects_max_iterations():
     assert eng.calls == 3
     assert sum(t.startswith("rewrite") for t in final["trace"]) == 2
     assert final["answer"]                          # still answers from best effort
+
+
+# --- approval agent: branch / cycle / durable HITL ----------------------------
+def test_route_after_assess_branches():
+    """The router is pure — test every branch directly (no langgraph)."""
+    from langgraph_rag.approval_agent import route_after_assess
+    base = {"failure_risk": 0.5, "risked_value": 100.0, "intervention_cost": 10_000,
+            "gather_attempts": 0}
+    assert route_after_assess({**base, "failure_risk": 0.0}) == "gather"
+    assert route_after_assess({**base, "risked_value": -1.0}) == "auto_reject"
+    assert route_after_assess({**base, "intervention_cost": 10_000}) == "auto_approve"
+    assert route_after_assess({**base, "intervention_cost": 90_000}) == "human_review"
+    # cycle is capped: unknown risk but already gathered -> don't loop forever
+    assert route_after_assess({**base, "failure_risk": 0.0,
+                               "gather_attempts": 1}) != "gather"
+
+
+@needs_lg
+def test_agent_auto_paths():
+    from langgraph_rag.approval_agent import build_approval_graph, _initial
+    app = build_approval_graph()
+    s = app.invoke(_initial("w", 1800, 18_000, 0.55),
+                   {"configurable": {"thread_id": "a"}})
+    assert s["outcome"] == "auto-approved"
+    s = app.invoke(_initial("w", 90, 60_000, 0.20),
+                   {"configurable": {"thread_id": "b"}})
+    assert s["outcome"] == "rejected"
+
+
+@needs_lg
+def test_agent_cycle_enriches_then_proceeds():
+    from langgraph_rag.approval_agent import build_approval_graph, _initial
+    app = build_approval_graph()
+    s = app.invoke(_initial("w", 1200, 15_000, 0.0),    # unknown risk
+                   {"configurable": {"thread_id": "c"}})
+    assert any(t.startswith("gather") for t in s["trace"])   # the cycle fired
+    assert s["trace"].count("assess: ") == 0 or \
+        sum(t.startswith("assess") for t in s["trace"]) == 2  # assessed twice
+    assert s["outcome"]                                   # reached a decision
+
+
+@needs_lg
+def test_agent_human_in_the_loop_survives_restart(tmp_path):
+    """The flagship test: pause for a human, 'restart', resume from disk."""
+    from langgraph.types import Command
+    from langgraph_rag.approval_agent import (
+        build_approval_graph, sqlite_saver, _initial, is_interrupted)
+    db = str(tmp_path / "approvals.sqlite")
+    cfg = {"configurable": {"thread_id": "AFE-1"}}
+
+    app1 = build_approval_graph(sqlite_saver(db))
+    s1 = app1.invoke(_initial("w", 2100, 140_000, 0.62), cfg)   # costly -> human
+    assert is_interrupted(app1, cfg)            # paused, awaiting a human
+    assert not s1["outcome"]
+    assert s1.get("__interrupt__")              # interrupt payload surfaced
+
+    # brand-new graph object from the SAME db file == a process restart
+    app2 = build_approval_graph(sqlite_saver(db))
+    assert is_interrupted(app2, cfg)            # state was persisted to disk
+    s2 = app2.invoke(Command(resume="approve"), cfg)
+    assert s2["outcome"] == "approved by human"
+
+
+@needs_lg
+def test_agent_human_can_reject(tmp_path):
+    from langgraph.types import Command
+    from langgraph_rag.approval_agent import (
+        build_approval_graph, sqlite_saver, _initial)
+    db = str(tmp_path / "approvals.sqlite")
+    cfg = {"configurable": {"thread_id": "AFE-2"}}
+    app = build_approval_graph(sqlite_saver(db))
+    app.invoke(_initial("w", 2100, 140_000, 0.62), cfg)
+    s = app.invoke(Command(resume="reject"), cfg)
+    assert s["outcome"] == "rejected by human"

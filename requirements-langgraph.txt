@@ -3,3 +3,6 @@
 # NoteSearchEngine). Pure-Python and light; never imported by the deployed app.
 #   pip install -r requirements-rag.txt -r requirements-langgraph.txt
 langgraph>=0.2
+# Durable, file-backed checkpointer for the approval-agent reference flow
+# (human-in-the-loop state that survives a process restart).
+langgraph-checkpoint-sqlite>=2.0
