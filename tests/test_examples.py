@@ -43,3 +43,18 @@ def test_model_routing_runs_each_step_on_its_provider():
     assert any(t.startswith("classify [stub") for t in final["trace"])
     assert any(t.startswith("draft    [stub") for t in final["trace"])
     assert any(t.startswith("polish   [stub") for t in final["trace"])
+
+
+@needs_lg
+def test_supervisor_dispatches_to_the_right_specialist():
+    """The supervisor routes each question to the matching specialist agent."""
+    from examples.supervisor import run
+    cases = {
+        "my ESP keeps tripping on underload": "production",
+        "why is my well making more water and losing pressure": "reservoir",
+        "the separator keeps tripping on high level": "facilities",
+    }
+    for question, expected in cases.items():
+        final = run(question, supervisor_model="stub", expert_model="stub")
+        assert final["route"] == expected, (question, final["route"])
+        assert final["answer"]
