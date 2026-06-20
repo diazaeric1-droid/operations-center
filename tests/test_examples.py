@@ -30,3 +30,16 @@ def test_graph_loops_until_constraint_met(monkeypatch):
 
     out, ok = run_prompt("stub")            # the one-shot version overshoots
     assert not ok and len(out) > LIMIT
+
+
+@needs_lg
+def test_model_routing_runs_each_step_on_its_provider():
+    """The routing agent: classify+draft on the 'cheap' model, polish on the
+    'premium' model — forced to stub for a deterministic, key-free test."""
+    from examples.model_routing import run
+    final = run("why might a well make more water?", cheap="stub", premium="stub")
+    assert final["category"] and final["draft"] and final["answer"]
+    # the trace records which provider handled each step (the routing)
+    assert any(t.startswith("classify [stub") for t in final["trace"])
+    assert any(t.startswith("draft    [stub") for t in final["trace"])
+    assert any(t.startswith("polish   [stub") for t in final["trace"])
