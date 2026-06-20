@@ -23,10 +23,10 @@ def test_graph_loops_until_constraint_met(monkeypatch):
     from examples.prompt_vs_graph import build, run_prompt, LIMIT
 
     app = build()
-    final = app.invoke({"instruction": "In one short sentence: why?",
-                        "draft": "", "rounds": 0, "trace": []})
+    final = app.invoke({"instruction": "In one short sentence: why?", "draft": "",
+                        "rounds": 0, "provider": "stub", "trace": []})
     assert len(final["draft"]) <= LIMIT     # the loop satisfied the constraint
     assert final["rounds"] >= 1             # …and it actually had to loop
 
-    out, ok = run_prompt()                  # the one-shot version overshoots
+    out, ok = run_prompt("stub")            # the one-shot version overshoots
     assert not ok and len(out) > LIMIT

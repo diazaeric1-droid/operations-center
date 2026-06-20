@@ -92,6 +92,38 @@ paused), then resumes from disk with the reviewer's decision. That "wait days,
 survive a restart, resume" property is the thing prompt chains fundamentally
 can't do, and the one to be able to speak to in an interview.
 
+## Running on any model — `providers.py` (provider-agnostic)
+
+The agent's logic doesn't care which model answers, so the same graph runs on
+Claude, Gemini, Groq, GitHub Models (GPT-4o), OpenRouter, or OpenAI. One `chat()`
+abstracts them: five speak the OpenAI Chat Completions protocol (so a single
+OpenAI client with a different `base_url` covers them), and Claude uses the
+Anthropic SDK.
+
+```bash
+pip install -r requirements-providers.txt        # the OpenAI universal client
+python -m langgraph_rag.providers                 # which providers have a key set?
+
+# get a FREE key, export it, and run the demo agent on that model:
+export GEMINI_API_KEY=...        # aistudio.google.com  (free, no card)
+python examples/prompt_vs_graph.py graph gemini
+export GROQ_API_KEY=...          # console.groq.com     (free, no card — Llama)
+python examples/prompt_vs_graph.py graph groq
+```
+
+| provider | env var | free key |
+|---|---|---|
+| `claude` | `ANTHROPIC_API_KEY` | console.anthropic.com ($5 trial) |
+| `gemini` | `GEMINI_API_KEY` | aistudio.google.com (free) |
+| `groq` | `GROQ_API_KEY` | console.groq.com (free) |
+| `github` | `GITHUB_TOKEN` | a GitHub PAT with the Models scope (free) |
+| `openrouter` | `OPENROUTER_API_KEY` | openrouter.ai/keys (free open models) |
+| `openai` | `OPENAI_API_KEY` | platform.openai.com (paid) |
+
+The résumé line this earns: *provider-agnostic LLM agents across Claude, GPT,
+Gemini, and open models — with per-task model routing* (e.g. a cheap fast model
+for the grade step, a premium model for the final answer).
+
 ## Design notes
 
 - The package is `langgraph_rag`, **not** `langgraph` — a top-level `langgraph/`

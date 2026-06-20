@@ -1,0 +1,6 @@
+# Multi-provider LLM extra (langgraph_rag/providers.py). The OpenAI SDK is the
+# universal client for every OpenAI-compatible provider (Gemini, Groq, GitHub
+# Models, OpenRouter, OpenAI); `anthropic` (already in requirements.txt) handles
+# Claude. Optional — only needed to run the agent on a non-Claude provider.
+#   pip install -r requirements-providers.txt
+openai>=1.0

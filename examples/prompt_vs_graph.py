@@ -1,4 +1,5 @@
-"""Same task, two ways — so you can SEE when you need LangGraph and when you don't.
+"""Same task, two ways, on ANY model — see when you need LangGraph, and see the
+model-agnostic pattern in action.
 
 Task: write a one-line summary that must be <= LIMIT characters.
 
@@ -7,22 +8,22 @@ Task: write a one-line summary that must be <= LIMIT characters.
   (b) GRAPH mode   — a LangGraph graph that checks the length and LOOPS
       (ask → check → "make it shorter" → ask …) until the constraint is met.
 
-The only difference is control flow. A prompt is a function call; a graph is a
-little program with a branch and a loop. The "toggle" between them is just an
-``if`` at the bottom of this file — there is no LangGraph switch to flip.
+The model is swappable — the SAME graph runs on Claude, Gemini, Groq, GitHub
+Models (GPT-4o), OpenRouter, or OpenAI. That's the "provider-agnostic" skill:
+the agent's logic doesn't care which model answers.
 
 Run it:
-    python examples/prompt_vs_graph.py            # runs both
-    python examples/prompt_vs_graph.py prompt     # just the one-call version
-    python examples/prompt_vs_graph.py graph      # just the looping version
+    python examples/prompt_vs_graph.py                  # both modes, auto-pick a model
+    python examples/prompt_vs_graph.py graph gemini     # the loop, on Gemini
+    python examples/prompt_vs_graph.py both groq         # both, on Groq (Llama)
+    python examples/prompt_vs_graph.py prompt stub       # no key needed (deterministic)
 
-With ANTHROPIC_API_KEY set it makes real Claude calls; without one it uses a tiny
-deterministic stand-in so the *structure* runs with zero setup.
+Provider defaults to "auto" (first one whose API key is set; else a no-key stub
+so it always runs). Keys: see langgraph_rag/providers.py.
 """
 from __future__ import annotations
 
 import operator
-import os
 import sys
 from typing import Annotated, TypedDict
 
@@ -30,35 +31,38 @@ TASK = "Explain why an ESP pump trips on underload."
 LIMIT = 80   # the summary must fit in this many characters
 
 
-# --- "the model": one function both modes call -------------------------------
-# THIS is what "a prompt" is — a single call that maps text in -> text out.
-def call_model(instruction: str) -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    if key:
-        import anthropic
-        msg = anthropic.Anthropic(api_key=key).messages.create(
-            model="claude-sonnet-4-6", max_tokens=120,
-            messages=[{"role": "user", "content": instruction}])
-        return "".join(b.text for b in msg.content if b.type == "text").strip()
-    return _stub(instruction)
+# --- "the model": one function, any provider ---------------------------------
+def call_model(instruction: str, provider: str) -> str:
+    if provider == "stub":
+        return _stub(instruction)
+    from langgraph_rag.providers import chat        # the model-agnostic layer
+    return chat(instruction, provider=provider, max_tokens=120)
 
 
 def _stub(instruction: str) -> str:
     """No-key stand-in: returns a shorter answer the more insistently you ask."""
     variants = [
         "An ESP trips on underload when there is too little fluid over the pump "
-        "and the drive shuts it down to protect the motor",                      # ~117
+        "and the drive shuts it down to protect the motor",
         "ESP underload trip: too little fluid over the pump, the drive shuts it "
-        "down to protect the motor",                                             # ~94
-        "ESP underload: low fluid over the pump, drive trips to protect the motor",  # ~71
-        "Underload = low fluid over pump; drive trips the motor",                # ~53
+        "down to protect the motor",
+        "ESP underload: low fluid over the pump, drive trips to protect the motor",
+        "Underload = low fluid over pump; drive trips the motor",
     ]
     return variants[min(instruction.lower().count("shorter"), len(variants) - 1)]
 
 
+def resolve_provider(arg: str | None) -> str:
+    """'auto' (or no arg) -> first provider with a key set, else the stub."""
+    if arg and arg != "auto":
+        return arg
+    from langgraph_rag.providers import first_available
+    return first_available() or "stub"
+
+
 # --- (a) PROMPT mode: one call, no recourse ----------------------------------
-def run_prompt() -> tuple[str, bool]:
-    out = call_model(f"In one short sentence: {TASK}")
+def run_prompt(provider: str = "stub") -> tuple[str, bool]:
+    out = call_model(f"In one short sentence: {TASK}", provider)
     ok = len(out) <= LIMIT
     print("\n[a] PROMPT — one model call")
     print(f"    \"{out}\"")
@@ -73,11 +77,12 @@ class State(TypedDict):
     instruction: str
     draft: str
     rounds: int
+    provider: str                          # which model to call (passed in state)
     trace: Annotated[list, operator.add]   # reducer: append, don't overwrite
 
 
 def _draft(state: State) -> dict:
-    out = call_model(state["instruction"])
+    out = call_model(state["instruction"], state["provider"])
     return {"draft": out,
             "trace": [f"round {state['rounds']}: {len(out)} chars — \"{out[:46]}…\""]}
 
@@ -105,10 +110,10 @@ def build():
     return g.compile()
 
 
-def run_graph() -> State:
+def run_graph(provider: str = "stub") -> State:
     app = build()
     final = app.invoke({"instruction": f"In one short sentence: {TASK}",
-                        "draft": "", "rounds": 0, "trace": []})
+                        "draft": "", "rounds": 0, "provider": provider, "trace": []})
     print("\n[b] GRAPH — loop until it fits")
     for line in final["trace"]:
         print("   ", line)
@@ -117,10 +122,11 @@ def run_graph() -> State:
 
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "both"   # <- the only "toggle"
-    print(f"TASK: {TASK}\nCONSTRAINT: <= {LIMIT} chars   "
-          f"(model: {'Claude' if os.environ.get('ANTHROPIC_API_KEY') else 'no-key stub'})")
+    args = sys.argv[1:]
+    mode = args[0] if args else "both"                 # prompt | graph | both
+    provider = resolve_provider(args[1] if len(args) > 1 else "auto")
+    print(f"TASK: {TASK}\nCONSTRAINT: <= {LIMIT} chars   (model provider: {provider})")
     if mode in ("prompt", "both"):
-        run_prompt()
+        run_prompt(provider)
     if mode in ("graph", "both"):
-        run_graph()
+        run_graph(provider)
