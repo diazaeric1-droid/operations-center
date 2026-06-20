@@ -45,3 +45,16 @@ def test_chat_missing_key_raises_clear_error(monkeypatch):
     with pytest.raises(RuntimeError) as e:
         providers.chat("hi", provider="gemini")
     assert "GEMINI_API_KEY" in str(e.value)        # tells you exactly what to set
+
+
+def test_resolve_tokens_real_partial_and_estimated():
+    from langgraph_rag.providers import _resolve_tokens
+    # full usage -> real numbers, not flagged estimated
+    assert _resolve_tokens(120, 30, "prompt", "text") == (120, 30, False, False)
+    # both missing -> ~4 chars/token estimate, both flagged
+    pt, ct, pe, ce = _resolve_tokens(None, None, "a" * 40, "b" * 20)
+    assert (pt, ct, pe, ce) == (10, 5, True, True)
+    assert _resolve_tokens(None, None, "", "")[:2] == (1, 1)        # floor of 1
+    # partial usage -> the REAL count is preserved and NOT flagged estimated
+    pt, ct, pe, ce = _resolve_tokens(200, None, "x", "hello world")
+    assert pt == 200 and pe is False and ce is True

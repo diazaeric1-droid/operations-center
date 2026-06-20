@@ -125,6 +125,90 @@ def test_argv_rejects_flag_without_value():
     assert self_judging(["groq"], "gemini") is False
 
 
+# --- observability / cost tracing --------------------------------------------
+def test_price_lookup_known_and_unknown():
+    from langgraph_rag.tracing import price_for, cost_usd
+    pin, pout, known = price_for("claude-sonnet-4-6")
+    assert known and pin > 0 and pout > pin
+    assert price_for("some-unknown-model-xyz") == (0.0, 0.0, False)
+    # 1M in + 1M out at sonnet rates = $3 + $15
+    assert round(cost_usd("claude-sonnet-4-6", 1_000_000, 1_000_000), 2) == 18.00
+
+
+def test_summary_aggregates_per_provider():
+    from langgraph_rag.tracing import TraceEvent, summary
+    events = [
+        TraceEvent("groq", "llama-3.3-70b", 50, 80, 0.3, 0.0001),
+        TraceEvent("groq", "llama-3.3-70b", 60, 90, 0.5, 0.0002),
+        TraceEvent("gemini", "gemini-2.5-flash", 40, 200, 2.9, 0.0006),
+    ]
+    s = summary(events)
+    assert s["calls"] == 3
+    assert s["total_tokens"] == (130 + 150 + 240)
+    assert s["by_provider"]["groq"]["calls"] == 2
+    assert s["by_provider"]["gemini"]["p95_latency"] == 2.9
+
+
+def test_chat_traced_records_an_event(monkeypatch):
+    from langgraph_rag import tracing, providers
+    monkeypatch.setattr(providers, "chat_meta", lambda *a, **k: {
+        "text": "hi", "provider": "groq", "model": "llama-3.3-70b",
+        "prompt_tokens": 10, "completion_tokens": 20, "tokens_estimated": False})
+    with tracing.trace() as events:
+        out = tracing.chat_traced("q", provider="groq", label="answer")
+    assert out == "hi"
+    assert len(events) == 1 and events[0].total_tokens == 30
+    assert events[0].cost_usd > 0 and events[0].label == "answer"
+
+
+def test_observability_workload_traces_each_provider(monkeypatch):
+    from langgraph_rag import providers
+    from examples.observability import run_workload
+    monkeypatch.setattr(providers, "chat_meta", lambda prompt, provider, **k: {
+        "text": "a", "provider": provider, "model": "llama-3.3-70b",
+        "prompt_tokens": 5, "completion_tokens": 5, "tokens_estimated": False})
+    events = run_workload("q", ["groq", "gemini"])
+    assert len(events) == 2 and {e.provider for e in events} == {"groq", "gemini"}
+
+
+def test_summary_lists_all_models_per_provider():
+    from langgraph_rag.tracing import TraceEvent, summary
+    events = [TraceEvent("claude", "claude-haiku", 100, 100, 0.2, 0.001),
+              TraceEvent("claude", "claude-opus", 100, 100, 0.3, 0.003)]
+    # the cost must not be tagged to just one model when a provider serves several
+    assert summary(events)["by_provider"]["claude"]["models"] == \
+        ["claude-haiku", "claude-opus"]
+
+
+def test_print_report_marks_unknown_price_not_as_free(capsys):
+    from langgraph_rag.tracing import TraceEvent, print_report
+    print_report([TraceEvent("x", "mystery-model", 50, 50, 0.4, 0.0,
+                             price_known=False)])
+    out = capsys.readouterr().out
+    assert "? no price" in out          # the row is marked, not a bare $ amount
+    assert "no list price" in out       # legend explains it
+    assert "≥" in out                   # the total is flagged as a lower bound
+
+
+def test_trace_restores_active_on_exception_and_record_is_safe():
+    from langgraph_rag import tracing
+    try:
+        with tracing.trace():
+            raise ValueError("boom")
+    except ValueError:
+        pass
+    assert tracing._active is None                 # restored despite the exception
+    tracing.record(object())                       # no active trace -> silent no-op
+
+
+def test_pct_edges():
+    from langgraph_rag.tracing import _pct
+    assert _pct([], 0.95) == 0.0
+    assert _pct([5.0], 0.95) == 5.0
+    assert _pct([1.0, 2.0, 3.0], 1.0) == 3.0
+    assert _pct([1.0, 2.0, 3.0], 0.0) == 1.0
+
+
 @needs_lg
 def test_supervisor_dispatches_to_the_right_specialist():
     """The supervisor routes each question to the matching specialist agent."""

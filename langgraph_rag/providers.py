@@ -89,6 +89,18 @@ def chat(prompt: str, provider: str = "claude", model: Optional[str] = None,
     Same call shape regardless of vendor — that's the point. Raises ValueError on
     an unknown provider and RuntimeError when the provider's API key isn't set.
     """
+    return chat_meta(prompt, provider, model, system, max_tokens, temperature)["text"]
+
+
+def chat_meta(prompt: str, provider: str = "claude", model: Optional[str] = None,
+              system: Optional[str] = None, max_tokens: int = 1024,
+              temperature: float = 0.0) -> dict:
+    """Like chat() but returns the reply PLUS metadata for observability:
+    {text, provider, model, prompt_tokens, completion_tokens, tokens_estimated}.
+
+    Token counts come from the API's usage field when present; if a provider omits
+    usage they're estimated (~4 chars/token) and tokens_estimated is True.
+    """
     if provider not in PROVIDERS:
         raise ValueError(f"unknown provider '{provider}'. options: {list(PROVIDERS)}")
     p = PROVIDERS[provider]
@@ -102,21 +114,45 @@ def chat(prompt: str, provider: str = "claude", model: Optional[str] = None,
     if p.kind == "anthropic":
         import anthropic
         kwargs = {"model": model, "max_tokens": max_tokens,
+                  "temperature": temperature,
                   "messages": [{"role": "user", "content": prompt}]}
         if system:
             kwargs["system"] = system
         msg = anthropic.Anthropic(api_key=key).messages.create(**kwargs)
-        return "".join(b.text for b in msg.content if b.type == "text").strip()
+        text = "".join(b.text for b in msg.content if b.type == "text").strip()
+        u = getattr(msg, "usage", None)
+        pt = getattr(u, "input_tokens", None)
+        ct = getattr(u, "output_tokens", None)
+    else:  # OpenAI-compatible: gemini / groq / github / openrouter / openai
+        from openai import OpenAI
+        client = OpenAI(api_key=key, base_url=p.base_url)
+        messages = ([{"role": "system", "content": system}] if system else []) + \
+            [{"role": "user", "content": prompt}]
+        resp = client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens,
+            temperature=temperature)
+        text = (resp.choices[0].message.content or "").strip()
+        u = getattr(resp, "usage", None)
+        pt = getattr(u, "prompt_tokens", None)
+        ct = getattr(u, "completion_tokens", None)
 
-    # OpenAI-compatible: gemini / groq / github / openrouter / openai
-    from openai import OpenAI
-    client = OpenAI(api_key=key, base_url=p.base_url)
-    messages = ([{"role": "system", "content": system}] if system else []) + \
-        [{"role": "user", "content": prompt}]
-    resp = client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens,
-        temperature=temperature)
-    return (resp.choices[0].message.content or "").strip()
+    pt, ct, pe, ce = _resolve_tokens(pt, ct, prompt, text)
+    return {"text": text, "provider": provider, "model": model,
+            "prompt_tokens": pt, "completion_tokens": ct,
+            "prompt_estimated": pe, "completion_estimated": ce,
+            "tokens_estimated": pe or ce}
+
+
+def _resolve_tokens(pt, ct, prompt: str, text: str):
+    """Real usage when present, ~4-chars/token estimate per MISSING field only.
+    Returns (prompt_tokens, completion_tokens, prompt_estimated, completion_estimated)
+    so a partially-reported usage doesn't flag the real count as a guess."""
+    prompt_estimated, completion_estimated = pt is None, ct is None
+    if pt is None:
+        pt = max(1, len(prompt) // 4)
+    if ct is None:
+        ct = max(1, len(text) // 4)
+    return int(pt), int(ct), prompt_estimated, completion_estimated
 
 
 if __name__ == "__main__":   # python -m langgraph_rag.providers  -> who's ready?
