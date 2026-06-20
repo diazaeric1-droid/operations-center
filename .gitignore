@@ -28,3 +28,7 @@ apps/esp-failure-risk-agent/data/synthetic/*.csv
 apps/esp-failure-risk-agent/data/synthetic/labels.csv
 apps/afe-copilot/drafts/
 apps/afe-copilot/pipeline.sqlite
+
+# DL autoencoder: weights regenerate via `python -m dl.train`; keep the
+# tiny JSON reports as committed evidence of the result.
+dl/artifacts/*.pt
