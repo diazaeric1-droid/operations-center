@@ -229,14 +229,6 @@ def render() -> None:
 # in the daily brief, so slow degraders show up automatically. Scoring lives in
 # dl/score.py (shared with Surveillance); torch is optional, so this is a silent
 # no-op when the extras / trained model are absent — the brief stays clean.
-@st.cache_data(show_spinner=False)
-def _ew_scored(token: str) -> pd.DataFrame:
-    from dl import score as dl_score
-    if not dl_score.model_ready():
-        return pd.DataFrame()
-    return dl_score.flag_table(dl_score.score_fleet_latest(c.fleet_for_token(token)))
-
-
 def _early_warning_md(deep: pd.DataFrame) -> str:
     """Brief section listing the deep-only catches (empty string if none)."""
     if deep is None or deep.empty:
@@ -255,10 +247,7 @@ def _early_warning_md(deep: pd.DataFrame) -> str:
 def _early_warning(token: str) -> tuple[str, "pd.DataFrame | None"]:
     """(brief markdown, deep-only frame) for the active fleet — ("", None) when the
     deep detector isn't available."""
-    try:
-        ew = _ew_scored(token)
-    except Exception:  # noqa: BLE001 — never let the optional detector break the brief
-        return "", None
+    ew = c.early_warning_flags(token)
     if ew is None or ew.empty:
         return "", None
     deep = ew[ew["deep_only"]]

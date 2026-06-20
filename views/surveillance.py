@@ -326,13 +326,6 @@ def _well_charts(df, meta, win: int) -> None:
 # tab degrades to a readable install/train prompt when it (or the model) is absent.
 
 
-@st.cache_data(show_spinner=False)
-def ew_scored(token: str) -> pd.DataFrame:
-    """Cached fleet scoring (flagged/alarm/deep_only columns) for the active token."""
-    from dl import score as dl_score
-    return dl_score.flag_table(dl_score.score_fleet_latest(c.fleet_for_token(token)))
-
-
 def _early_warning(fleet: dict) -> None:
     pt.section("Early Warning — Deep Anomaly Detection",
                "An LSTM autoencoder trained only on healthy wells scores each well by "
@@ -368,7 +361,7 @@ def _early_warning(fleet: dict) -> None:
         return
 
     with st.spinner("Scoring the fleet with the autoencoder…"):
-        df = ew_scored(c.scada_token())
+        df = c.early_warning_flags(c.scada_token())
     if df.empty:
         pt.empty_state("No wells with a full window to score.")
         return

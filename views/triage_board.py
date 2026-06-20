@@ -147,6 +147,8 @@ def render() -> None:
             "'NPV Basis' flags wells where the full chain economics weren't reachable "
             "and a transparent proxy was used. ★ marks a fleet-registry hero well.")
 
+    _deep_drift_lane(opportunities)
+
     pt.section("At-Risk Watch List",
                "Failure signature present, but intervening now destroys value "
                "(non-positive risk-weighted NPV at today's risk and cost). The action "
@@ -236,6 +238,41 @@ def _ranking_scorecard(board: pd.DataFrame) -> None:
             "(e.g. early electrical) defer few barrels, so they rank lower. Scored on "
             "the generator's signature labels for THIS fleet (the ESP model's own "
             "labels.csv is a different fleet and doesn't join here).")
+
+
+def _deep_drift_lane(opportunities: pd.DataFrame) -> None:
+    """Surface deep-autoencoder drift the certified risked-NPV ranking hasn't picked
+    up as an opportunity. Purely ADDITIVE — a forward-looking lane that never touches
+    the ranking numbers. Silent no-op when the optional DL extras/model are absent."""
+    ew = c.early_warning_flags(c.DISK_TOKEN)
+    if ew.empty:
+        return
+    deep = ew[ew["deep_only"]]
+    opp_ids = (set(opportunities["well_id"].astype(str))
+               if not opportunities.empty else set())
+    below = deep[~deep["well"].isin(opp_ids)]
+    if below.empty:
+        return
+    pt.section("Deep-Drift Early Warnings — Below the Ranking",
+               "The deep autoencoder flags these wells as drifting from normal, yet the "
+               "risked-NPV ranking hasn't surfaced them as opportunities — slow "
+               "degradation that hasn't deferred enough barrels or tripped enough ESP "
+               "risk to rank. A forward-looking lane on top of the certified ranking.")
+    rows = below.head(12)
+    metas = [fr.get(str(w)) for w in rows["well"]]
+    tbl = pd.DataFrame({
+        "Well": [f"★ {m.well_id}" if m.hero else m.well_id for m in metas],
+        "Field": [f"{m.basin} · {m.formation}" for m in metas],
+        "Lift": [m.lift for m in metas],
+        "Top Drifting Channel": list(rows["driver"]),
+        "Drift Score": [f"{s:.2f}" for s in rows["score"]],
+        "Status": "deep-drift — watch / pre-empt",
+    })
+    st.dataframe(tbl, width="stretch", hide_index=True)
+    theme.source_note(
+        "Deep-drift flags from the LSTM autoencoder (Surveillance → Early Warning · "
+        "Deep AI); 'deep-only' = the rate-drop alarm did not fire. These do NOT alter "
+        "the certified risked-NPV ranking above — they surface drift it can't see yet.")
 
 
 def _intervention_table(opps: pd.DataFrame) -> pd.DataFrame:

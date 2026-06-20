@@ -6,6 +6,7 @@ reason codes, so the queue is honestly N/A there.
 """
 from __future__ import annotations
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -122,4 +123,38 @@ def render() -> None:
                "Chain** page (detect → predict → authorize). Program-level capital "
                "allocation lives in the **Capital Desk** product (sidebar switcher).")
 
+    _proactive_drift_lane(queue)
+
     theme.references(["npv", "pareto"])
+
+
+def _proactive_drift_lane(queue) -> None:
+    """Forward-looking complement to the reactive recovery queue: wells the deep
+    autoencoder flags as drifting that aren't deferring yet. Address drift before it
+    becomes downtime. Silent no-op when the optional DL extras/model are absent."""
+    ew = c.early_warning_flags(c.DISK_TOKEN)
+    if ew.empty:
+        return
+    deep = ew[ew["deep_only"]]
+    queued = (set(queue["well_id"].astype(str))
+              if queue is not None and len(queue) else set())
+    proactive = deep[~deep["well"].isin(queued)]
+    if proactive.empty:
+        return
+    pt.section("Proactive — Deep-Drift Candidates (Pre-Deferment)",
+               "Wells the deep autoencoder flags as drifting from normal that aren't "
+               "deferring yet — not in the reactive queue above. Catching drift before "
+               "it becomes downtime is the cheapest barrel you'll ever save.")
+    rows = proactive.head(10)
+    tbl = pd.DataFrame({
+        "Well": list(rows["well"]),
+        "Top Drifting Channel": list(rows["driver"]),
+        "Drift Score": [f"{s:.2f}" for s in rows["score"]],
+        "Suggested Action": "inspect / pre-empt before deferment",
+    })
+    st.dataframe(tbl, width="stretch", hide_index=True)
+    theme.source_note(
+        "Forward-looking complement to the reactive queue: deep-drift flags from the "
+        "LSTM autoencoder ('deep-only' = the rate-drop alarm has not fired). Surfaced "
+        "so slow degraders are addressed before they start deferring barrels. Full "
+        "leaderboard on Surveillance → Early Warning · Deep AI.")
