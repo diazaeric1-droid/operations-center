@@ -24,8 +24,15 @@ so it always runs). Keys: see langgraph_rag/providers.py.
 from __future__ import annotations
 
 import operator
+import os
 import sys
 from typing import Annotated, TypedDict
+
+# Make the project root importable when this file is run directly
+# (`python examples/prompt_vs_graph.py …`): running a script puts its OWN folder
+# (examples/) on sys.path, not the project root, so `import langgraph_rag` would
+# fail. Mirrors what tests/conftest.py does for the test runner.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 TASK = "Explain why an ESP pump trips on underload."
 LIMIT = 80   # the summary must fit in this many characters
