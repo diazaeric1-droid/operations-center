@@ -43,8 +43,12 @@ PROVIDERS: dict[str, Provider] = {
     "claude": Provider(
         "claude", "anthropic", "ANTHROPIC_API_KEY", "claude-sonnet-4-6",
         None, "Anthropic — coding / agentic strength"),
+    # gemini-2.0-flash is the non-"thinking" Flash: it returns the full answer
+    # within a normal token budget. (gemini-2.5-flash spends tokens "thinking"
+    # first, so a small max_tokens truncates the visible reply — use a large
+    # max_tokens or disable thinking if you switch to it.)
     "gemini": Provider(
-        "gemini", "openai", "GEMINI_API_KEY", "gemini-2.5-flash",
+        "gemini", "openai", "GEMINI_API_KEY", "gemini-2.0-flash",
         "https://generativelanguage.googleapis.com/v1beta/openai/",
         "Google AI Studio free tier (Flash)"),
     "groq": Provider(
