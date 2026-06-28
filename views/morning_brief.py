@@ -48,6 +48,7 @@ def render() -> None:
     div = core.production_divergence_summary(fleet, anomalies)
     net_deferred = sum(float(getattr(a, "deferred_bopd", 0.0) or 0.0)
                        for a in active) * price * nri
+    ew_md, ew_deep = _early_warning(token)   # deep-drift catches (optional torch)
 
     sev = pd.Series([a.severity for a in active]).value_counts() if active else {}
     pt.kpi_row([
@@ -147,6 +148,21 @@ def render() -> None:
             "rate-drop vs. the expected Arps rate — no fixed thresholds, so one bad "
             "day can't inflate the baseline.")
 
+    if ew_deep is not None and not ew_deep.empty:
+        pt.section("Early Warning — Deep Drift",
+                   "Wells the deep autoencoder flags as drifting that the rate-drop "
+                   "alarm hasn't caught yet — slow degraders to review before they "
+                   "trip a hard alarm. (Full leaderboard on Surveillance → Early "
+                   "Warning · Deep AI.)")
+        ewt = ew_deep.head(10)[["well", "driver", "score"]].copy()
+        ewt["score"] = ewt["score"].map(lambda v: f"{v:.2f}")
+        ewt.columns = ["Well", "Top drifting channel", "Drift score"]
+        st.dataframe(ewt, width="stretch", hide_index=True)
+        theme.source_note(
+            "Deep early-warning flags from the LSTM autoencoder (trained on healthy "
+            "wells only); 'deep-only' = the rate-drop alarm did not fire. Surfaced "
+            "here so the daily brief catches slow drift automatically.")
+
     pt.section("Acknowledged / Suppressed",
                "Known or planned events (acknowledged.yml) — kept out of the active "
                "list so a planned workover doesn't re-fire HIGH every morning.")
@@ -169,6 +185,8 @@ def render() -> None:
     brief_md = core.digest_brief.render_brief_markdown(
         summary, anomalies, brief_date=as_of, events=events)
     brief_md = brief_md + "\n\n" + core._divergence_section_md(div, price, nri)
+    if ew_md:
+        brief_md = brief_md + "\n\n" + ew_md
     llm_key = st.session_state.get("anthropic_key", "")
     col_a, col_b = st.columns([1, 3])
     with col_a:
@@ -185,7 +203,8 @@ def render() -> None:
                     summary, anomalies, client=Anthropic(api_key=llm_key),
                     events=events)
                 st.session_state["brief_md_llm"] = (
-                    narr + "\n\n" + core._divergence_section_md(div, price, nri))
+                    narr + "\n\n" + core._divergence_section_md(div, price, nri)
+                    + (("\n\n" + ew_md) if ew_md else ""))
         except Exception as exc:  # noqa: BLE001 — bad key / network: stay deterministic
             st.warning(f"Narrated brief unavailable ({type(exc).__name__}); "
                        "showing the deterministic brief.")
@@ -203,6 +222,36 @@ def render() -> None:
     _email_brief_ui(final_brief, f"Operations Center — Morning Brief {as_of}")
 
     theme.references(["arps", "deferment"])
+
+
+# ---- Early Warning · deep drift (optional torch) -----------------------------
+# Surface the autoencoder's deep-only catches (drift the rate-drop alarm misses)
+# in the daily brief, so slow degraders show up automatically. Scoring lives in
+# dl/score.py (shared with Surveillance); torch is optional, so this is a silent
+# no-op when the extras / trained model are absent — the brief stays clean.
+def _early_warning_md(deep: pd.DataFrame) -> str:
+    """Brief section listing the deep-only catches (empty string if none)."""
+    if deep is None or deep.empty:
+        return ""
+    lines = [
+        "## Early Warning — Deep Drift Detector",
+        f"{len(deep)} well(s) are drifting from normal that the rate-drop alarm has "
+        "**not** flagged yet — early degraders to review before they trip a hard alarm:",
+    ]
+    for _, r in deep.head(8).iterrows():
+        lines.append(f"- **{r['well']}** — {r['driver']} drifting "
+                     f"(drift score {r['score']:.2f})")
+    return "\n".join(lines)
+
+
+def _early_warning(token: str) -> tuple[str, "pd.DataFrame | None"]:
+    """(brief markdown, deep-only frame) for the active fleet — ("", None) when the
+    deep detector isn't available."""
+    ew = c.early_warning_flags(token)
+    if ew is None or ew.empty:
+        return "", None
+    deep = ew[ew["deep_only"]]
+    return _early_warning_md(deep), deep
 
 
 def _email_brief_ui(brief_md: str, default_subject: str) -> None:

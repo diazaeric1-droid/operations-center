@@ -1,0 +1,20 @@
+# Optional RAG extras for the operator-note semantic search feature.
+#   pip install -r requirements-rag.txt
+# Kept SEPARATE from requirements.txt on purpose: the core console stays light
+# (Streamlit Cloud), and this heavier retrieval stack is installed only where
+# the RAG feature runs (local dev, the RAG container, AWS). The feature
+# degrades to a readable "extended install required" message when these absent.
+#
+# Embeddings: fastembed = ONNX runtime, NOT torch -> small, fast, no GPU, no key.
+# Vector DB:  pgvector via Postgres (local Docker today, AWS RDS in the cloud).
+
+llama-index-core>=0.11,<0.13
+llama-index-vector-stores-postgres>=0.2,<0.5
+llama-index-embeddings-fastembed>=0.2,<0.4
+fastembed>=0.3,<0.5
+
+# pgvector / Postgres driver stack
+psycopg2-binary>=2.9
+asyncpg>=0.29
+sqlalchemy>=2.0
+pgvector>=0.3

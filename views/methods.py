@@ -100,6 +100,57 @@ def render() -> None:
         "can't load at all, every well falls back to a baseline risk and the Triage Board / "
         "Home show a visible **degradation banner** rather than a misleading uniform fleet.")
 
+    pt.section("Deep anomaly autoencoder — backtest & honest limits")
+    ae, tr = _ae_eval(), _ae_train()
+    if ae:
+        cols = st.columns(4)
+        cols[0].metric("Autoencoder PR-AUC", f"{ae['autoencoder']['pr_auc']:.3f}",
+                       f"ROC-AUC {ae['autoencoder']['roc_auc']:.3f}", delta_color="off")
+        cols[1].metric("Rate-drop baseline PR-AUC",
+                       f"{ae['robust_z_baseline']['pr_auc']:.3f}",
+                       f"ROC-AUC {ae['robust_z_baseline']['roc_auc']:.3f}",
+                       delta_color="off")
+        cols[2].metric("PR-AUC lift", f"+{ae['pr_auc_lift']:.2f}",
+                       "vs the point z-score", delta_color="off")
+        cols[3].metric("Test windows", f"{ae['test_windows']:,}",
+                       f"{ae['anomalies']} injected anomalies", delta_color="off")
+    params = (f" (~{tr['n_parameters']:,} params, trained in "
+              f"{tr['train_seconds']:.0f}s on CPU, no GPU)" if tr else "")
+    lift = f"{ae['pr_auc_lift']:.2f}" if ae else "0.80"
+    ae_pr = f"{ae['autoencoder']['pr_auc']:.2f}" if ae else "0.98"
+    bz_pr = f"{ae['robust_z_baseline']['pr_auc']:.2f}" if ae else "0.18"
+    st.markdown(
+        "An **unsupervised LSTM autoencoder** — the Surveillance → *Early Warning · "
+        "Deep AI* tab, also surfaced in the Morning Brief, Triage Board, and Recovery "
+        f"Queue — trained **only on healthy wells**{params}. Reconstruction error on a "
+        "new window is the anomaly score. It targets the failure mode the single-channel "
+        "rate-drop alarm is blind to: **slow, correlated multivariate drift** (current "
+        "imbalance creeping up while intake pressure sags and amps climb), where no "
+        "single day is an outlier.\n\n"
+        "- **Backtest:** held-out wells with injected, gradual ESP pre-failure drift, "
+        "scored head-to-head against the **same shipped robust median/MAD z-score** the "
+        f"brief uses, on identical windows — autoencoder PR-AUC **{ae_pr}** vs **{bz_pr}** "
+        f"(a **+{lift}** lift).\n"
+        "- **A TARGETED win, not universal dominance.** The comparison is on the drift "
+        "regime *by construction*: a point z-score sees only the last day vs. its own "
+        "baseline, so a slow ramp contaminates that baseline and it never fires; the "
+        "autoencoder, reading the whole window across all channels, can. On **sudden "
+        "single-channel step-drops** — the z-score's design target — the cheap point test "
+        "stays the right tool. The two are **complementary**, which is exactly why the "
+        "deep flags are an *additive* early-warning lane that never replaces the rate-drop "
+        "alarm or the certified risked-NPV ranking.\n"
+        "- **An upper bound, same caveat as the ESP card.** The injected drift is clean "
+        f"and synthetic, so {ae_pr} PR-AUC is what's achievable on separable signatures — "
+        "**not** a real-world claim. A real operator's messy historian (missing days, "
+        "metering noise) would score materially lower; and because the injection is "
+        f"deliberately the z-score's worst case, the **+{lift} lift is itself an upper "
+        "bound on the advantage**. The honest next step is a labeled operator historian, "
+        "not a higher synthetic score.\n"
+        "- **Optional & non-blocking.** The detector is an opt-in extra (PyTorch); when "
+        "it's absent the four screens simply omit their early-warning lane and nothing "
+        "else changes. Method, loss curve, and the regenerate commands "
+        "(`python -m dl.train` / `python -m dl.evaluate`) are in `dl/README.md`.")
+
     pt.section("Lift-aware interventions")
     st.markdown(
         "Recommended interventions are gated by the well's **artificial-lift type**, so "
@@ -138,7 +189,10 @@ def render() -> None:
         "- **Digest event detector:** backtested with near-threshold decoys so "
         "precision/recall aren't trivially 1.0; a real lead-time/latency metric.\n"
         "- **Deferment cause classifier:** ~92% on a ground-truth-labeled eval "
-        "(CI gate fails below 80%).")
+        "(CI gate fails below 80%).\n"
+        f"- **Deep anomaly autoencoder:** +{(_ae_eval() or {}).get('pr_auc_lift', 0.80):.2f} "
+        "PR-AUC over the rate-drop z-score on injected drift — a targeted win on slow "
+        "multivariate drift, scored head-to-head (its own section above).")
 
     pt.section("What's synthetic (and what that means)")
     st.markdown(
@@ -167,3 +221,22 @@ def _esp_eval():
         return core.esp_model_eval()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _ae_report(name: str):
+    """Read a committed autoencoder report (eval_report / training_report)."""
+    import json
+    from pathlib import Path
+    p = Path(__file__).resolve().parent.parent / "dl" / "artifacts" / name
+    try:
+        return json.loads(p.read_text())
+    except Exception:  # noqa: BLE001 — report absent: section falls back to text
+        return None
+
+
+def _ae_eval():
+    return _ae_report("eval_report.json")
+
+
+def _ae_train():
+    return _ae_report("training_report.json")

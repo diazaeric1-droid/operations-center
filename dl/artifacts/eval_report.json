@@ -1,0 +1,13 @@
+{
+  "test_windows": 1875,
+  "anomalies": 337,
+  "autoencoder": {
+    "roc_auc": 0.998,
+    "pr_auc": 0.9755
+  },
+  "robust_z_baseline": {
+    "roc_auc": 0.5316,
+    "pr_auc": 0.1771
+  },
+  "pr_auc_lift": 0.7984
+}

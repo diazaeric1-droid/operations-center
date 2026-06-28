@@ -25,6 +25,7 @@ from views import (  # noqa: E402
     home,
     methods,
     morning_brief,
+    note_search,
     ongoing_events,
     recovery_queue,
     surveillance,
@@ -52,6 +53,8 @@ PAGES: dict[str, list[tuple[str, str, str, object, bool]]] = {
          causes_pareto.render, False),
         ("Recovery Work Queue", ":material/build:", "recovery-queue",
          recovery_queue.render, False),
+        ("Note Search (RAG)", ":material/search:", "note-search",
+         note_search.render, False),
     ],
     "Well File": [
         ("Well 360", ":material/oil_barrel:", "well-360", well_360.render, False),

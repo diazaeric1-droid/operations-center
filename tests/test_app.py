@@ -14,7 +14,7 @@ EXPECTED_NAV = {
     "Today": ["Home", "Surveillance", "Morning Brief", "Triage Board",
               "Ongoing Events"],
     "Loss Accounting": ["Deferment Overview", "Causes & Pareto",
-                        "Recovery Work Queue"],
+                        "Recovery Work Queue", "Note Search (RAG)"],
     "Well File": ["Well 360", "Action Chain"],
     "Data": ["Sources & BYOD", "Methods & Limitations"],
 }

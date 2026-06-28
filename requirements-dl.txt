@@ -1,0 +1,7 @@
+# Optional deep-learning extras for the LSTM anomaly autoencoder (dl/).
+#   pip install -r requirements-dl.txt
+# Kept SEPARATE from the core app (like requirements-rag.txt): torch is heavy and
+# the dl/ package is an opt-in experiment, never imported by the deployed app.
+# CPU wheels are fine — the model is tiny (~55k params); no GPU required.
+# scikit-learn (metrics) is already in requirements.txt.
+torch>=2.2

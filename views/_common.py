@@ -116,6 +116,26 @@ def fleet_for_token(token: str) -> dict:
     return _byod_fleet(token) if token.startswith("byod::") else _disk_fleet()
 
 
+@st.cache_data(show_spinner=False)
+def early_warning_flags(token: str) -> pd.DataFrame:
+    """Deep-drift flags for the active SCADA fleet (the LSTM autoencoder in dl/).
+
+    The single Streamlit-cached entry point shared by Surveillance, the Morning
+    Brief, the Triage Board, and the Recovery Queue. Returns an EMPTY frame when
+    the optional torch extras / trained model are absent, so every caller can use
+    it unconditionally and simply skip its section when the result is empty —
+    keeping the deployed app fully decoupled from the DL stack. Columns:
+    well, score, driver, maxz, flagged, alarm, deep_only.
+    """
+    try:
+        from dl import score as dl_score
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
+    if not dl_score.model_ready():
+        return pd.DataFrame()
+    return dl_score.flag_table(dl_score.score_fleet_latest(fleet_for_token(token)))
+
+
 def scada_source_label(token: str | None = None) -> str:
     token = token or scada_token()
     if token.startswith("byod::"):
