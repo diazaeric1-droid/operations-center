@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- notes_watch launchd job TEMPLATE.
+     Don't copy this by hand — run ./install-schedule.sh, which fills in
+     __NW_DIR__ with this folder's absolute path and loads the job.
+     Default heartbeat: every 30 minutes (StartInterval 1800). The runner
+     self-gates, so most ticks exit silently; you only get pinged when new
+     notes clear the materiality gate + cooldown. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.opsnotes.watch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NW_DIR__/run.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__NW_DIR__/state/notes_watch.log</string>
+    <key>StandardErrorPath</key>
+    <string>__NW_DIR__/state/notes_watch.log</string>
+    <key>WorkingDirectory</key>
+    <string>__NW_DIR__</string>
+</dict>
+</plist>
