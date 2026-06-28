@@ -8,6 +8,10 @@ retrieved snippets sent to the answer model), and serves three modes:
     python tools/vault_review.py ask "how did we decide X on ATLAS?"
     python tools/vault_review.py review "ATLAS trading bot"   # skeptical critique of that topic
     python tools/vault_review.py recent                 # critique your most-recently-edited notes
+    python tools/vault_review.py sweep                  # gated weekly sweep: skip if nothing
+                                                        #   changed, else re-ingest + review every
+                                                        #   project + Telegram a digest
+    #   sweep flags: --force (ignore the gate) · --no-notify (skip Telegram) · --budget N
 
 Pick the answer model with --provider (default: best available; gpt-4o/Claude give
 the sharpest review). Embeddings are local and need no key.
@@ -29,6 +33,7 @@ VAULT = Path(os.environ.get("VAULT_PATH",
 INGEST_DIRS = ["01-Projects", "02-Sessions", "00-Inbox", "04-References"]
 EMB_PATH = VAULT / ".vault_rag_emb.npy"        # index lives in the vault, NOT the repo
 META_PATH = VAULT / ".vault_rag_meta.json"
+SWEEP_STATE = VAULT / ".vault_sweep_state.json"  # last-sweep watermark (the "gate")
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 CHUNK, OVERLAP = 1200, 200
 
@@ -190,11 +195,125 @@ def _project_folders() -> list[str]:
     return [name for name, _ in sorted(folders, key=lambda x: -x[1])]   # biggest first
 
 
-def sweep(provider: str | None = None, budget: int = 40) -> Path:
+# --- the gate: only sweep when the vault actually changed ---------------------
+def _project_mtimes() -> dict[str, float]:
+    """Newest .md mtime per project folder — the signal the gate watches."""
+    base = VAULT / "01-Projects"
+    out: dict[str, float] = {}
+    if not base.exists():
+        return out
+    for d in sorted(p for p in base.iterdir()
+                    if p.is_dir() and not p.name.startswith("_")):
+        mts = [p.stat().st_mtime for p in d.rglob("*.md")]
+        if mts:
+            out[d.name] = max(mts)
+    return out
+
+
+def _load_sweep_state() -> dict:
+    if SWEEP_STATE.exists():
+        try:
+            return json.loads(SWEEP_STATE.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _changed_projects(prev: dict, cur: dict[str, float]) -> list[str]:
+    """Projects whose newest note is newer than the last sweep (or brand new)."""
+    pm = prev.get("project_mtimes", {})
+    return [name for name, mt in cur.items() if mt > pm.get(name, 0.0) + 1e-6]
+
+
+# --- the push: a phone notification once the sweep runs -----------------------
+DIGEST_SYS = (
+    "You are condensing a weekly project-review report into a phone notification. "
+    "Output: a one-line headline, then 3-6 terse bullets naming the projects that "
+    "most need attention and the single most important issue or action for each, "
+    "then one line with the top spin-off idea. Plain text, no markdown headers, no "
+    "fluff — the reader is the person who owns these projects.")
+
+
+def _deterministic_digest(date: str, sections: list, changed: list[str]) -> str:
+    head = (f"Weekly vault sweep — {date}: {len(sections)} projects reviewed"
+            + (f", {len(changed)} changed" if changed else ""))
+    bullets = []
+    for proj, txt, _ in sections[:6]:
+        if txt.startswith("("):
+            continue
+        first = " ".join(txt.split())[:140]
+        bullets.append(f"• {proj}: {first}")
+    return head + "\n" + "\n".join(bullets)
+
+
+def _telegram_html(date: str, digest: str, report_path, changed: list[str]) -> str:
+    import html
+    lines = digest.splitlines()
+    head = html.escape(lines[0]) if lines else f"Weekly vault sweep — {date}"
+    body = "\n".join(html.escape(ln) for ln in lines[1:])
+    parts = [f"🗂️ <b>{head}</b>"]
+    if changed:
+        parts.append(f"<i>changed since last sweep: {html.escape(', '.join(changed[:10]))}</i>")
+    parts.append("")
+    parts.append(body)
+    parts.append(f"\n<i>full report → {html.escape(report_path.name)}</i>")
+    return "\n".join(parts)
+
+
+def _notify_sweep(report_path, sections, ideas, changed, date, prov) -> None:
+    """Push a concise digest to Telegram. Best-effort: never fails the sweep."""
+    try:
+        from notes_watch import config as nw_config
+        from notes_watch.notify import send_telegram
+    except Exception as e:  # noqa: BLE001
+        print(f"[notify] notes_watch notify layer unavailable ({e}) — skipped push")
+        return
+    cfg = nw_config.load()
+    if not cfg.telegram_ready:
+        print("[notify] no Telegram creds (notes_watch/.env) — skipped push")
+        return
+    # Prefer an LLM-condensed digest; fall back to a deterministic one (no key).
+    digest = _deterministic_digest(date, sections, changed)
+    try:
+        from langgraph_rag.providers import chat
+        full = "\n\n".join(f"## {p}\n{t}" for p, t, _ in sections
+                           if not t.startswith("(")) + f"\n\n## Ideas\n{ideas}"
+        digest = chat(full[:8000], provider=prov, system=DIGEST_SYS,
+                      max_tokens=500) or digest
+    except Exception as e:  # noqa: BLE001 — keep the deterministic digest
+        print(f"[notify] LLM digest unavailable ({type(e).__name__}) — using plain digest")
+    ok = send_telegram(cfg.telegram_token, cfg.telegram_chat_id,
+                       _telegram_html(date, digest, report_path, changed))
+    print(f"[notify] telegram sent: {ok}")
+
+
+def sweep(provider: str | None = None, budget: int = 40,
+          force: bool = False, notify: bool = True) -> Path | None:
     """Loop over every project (up to `budget` LLM calls), review each, generate
-    spin-off ideas, and write a dated report to the vault Inbox."""
+    spin-off ideas, write a dated report to the vault Inbox, and push a digest.
+
+    The gate: if no project notes changed since the last sweep (and not --force),
+    skip entirely. When notes did change, re-ingest first so the review is over
+    the CURRENT vault, not a stale index.
+    """
     import datetime
     from langgraph_rag.providers import chat
+
+    cur_mtimes = _project_mtimes()
+    prev = _load_sweep_state()
+    changed = _changed_projects(prev, cur_mtimes)
+    if prev and not force and not changed:
+        print(f"[gate] no project notes changed since last sweep "
+              f"({prev.get('last_sweep')}) — skipping")
+        return None
+    if changed:
+        print(f"[gate] {len(changed)} project(s) changed: {', '.join(changed[:8])}"
+              f"{' …' if len(changed) > 8 else ''}")
+    # Re-ingest when the vault moved (or the index is missing) so we review fresh.
+    if force or changed or not EMB_PATH.exists():
+        print("[gate] re-ingesting vault before review…")
+        ingest()
+
     prov = _provider(provider)
     projects = _project_folders()
     print(f"[weekly sweep · {prov} · {len(projects)} projects · budget {budget} calls]")
@@ -235,6 +354,15 @@ def sweep(provider: str | None = None, budget: int = 40) -> Path:
     lines.append("---\n\n## Spin-off project ideas\n\n" + (ideas or "(none)") + "\n")
     out.write_text("\n".join(lines))
     print(f"\nwrote report -> {out}")
+
+    # commit the watermark so the next tick can skip an unchanged vault
+    SWEEP_STATE.write_text(json.dumps({
+        "last_sweep": today, "project_mtimes": cur_mtimes,
+        "changed": changed, "provider": prov,
+    }, indent=2))
+
+    if notify:
+        _notify_sweep(out, sections, ideas, changed, today, prov)
     return out
 
 
@@ -242,12 +370,17 @@ if __name__ == "__main__":
     argv = sys.argv[1:]
     cmd = argv[0] if argv else "help"
     prov, budget, positional = None, 40, []
+    force, notify = False, True
     i = 1
     while i < len(argv):
         if argv[i] == "--provider" and i + 1 < len(argv):
             prov = argv[i + 1]; i += 2
         elif argv[i] == "--budget" and i + 1 < len(argv):
             budget = int(argv[i + 1]); i += 2
+        elif argv[i] == "--force":
+            force = True; i += 1
+        elif argv[i] == "--no-notify":
+            notify = False; i += 1
         else:
             positional.append(argv[i]); i += 1
     rest = " ".join(positional)
@@ -261,6 +394,6 @@ if __name__ == "__main__":
     elif cmd == "recent":
         review(None, prov)
     elif cmd == "sweep":
-        sweep(prov, budget)
+        sweep(prov, budget, force=force, notify=notify)
     else:
         print(__doc__)
