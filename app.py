@@ -36,6 +36,15 @@ if "pytest" not in sys.modules and not st.session_state.get("_ops_healed"):
     for _m in list(sys.modules):
         if any(_m == p or _m.startswith(p + ".") for p in _OWN):
             sys.modules.pop(_m, None)
+    # Re-pin the repo root to sys.path[0] BEFORE the re-imports below. The vendored
+    # digest data_loader lazily inserts its demo/ dir (which carries an OLD
+    # fleet_registry copy) at sys.path[0] during a prior session's render, so after
+    # this eviction a bare `import fleet_registry` would otherwise resolve to that
+    # stale demo copy (live AttributeError: WellMeta has no `ctb`). The top-of-file
+    # insert can't help — it is guarded by `not in sys.path` and never re-pins.
+    if str(HERE) in sys.path:
+        sys.path.remove(str(HERE))
+    sys.path.insert(0, str(HERE))
     st.session_state["_ops_healed"] = True
 
 import product_theme as pt  # noqa: E402

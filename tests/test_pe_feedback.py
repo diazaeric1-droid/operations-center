@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -265,3 +266,41 @@ def test_optimization_board_is_the_nav_title_and_csv_name():
     src = (ROOT / "views" / "triage_board.py").read_text()
     assert "ops_optimization_board.csv" in src
     assert "ops_triage_board.csv" not in src
+
+
+def test_heal_repins_repo_root_ahead_of_vendored_demo_dirs():
+    """The warm-container self-heal must re-pin the repo root to sys.path[0] when it
+    evicts modules: the vendored digest data_loader lazily inserts its demo/ dir
+    (carrying an OLD fleet_registry copy) at sys.path[0], and the top-of-file insert
+    is guarded by `not in sys.path` so it never re-pins. Without the re-pin, every
+    session after the first Home render re-imports the STALE demo registry
+    (live AttributeError: WellMeta has no `ctb`)."""
+    src = (ROOT / "app.py").read_text()
+    heal = src[src.index("_OWN"):src.index('_ops_healed"] = True')]
+    assert "sys.path.remove(str(HERE))" in heal
+    assert "sys.path.insert(0, str(HERE))" in heal
+
+
+def test_root_fleet_registry_wins_when_root_is_pinned_first():
+    """Resolution-order invariant behind the heal re-pin: with the digest demo dir
+    at sys.path[0] and the repo root re-pinned ahead of it, a fresh import must
+    resolve the ROOT registry (which has the PE-feedback fields), not the vendored
+    demo copy. Restores sys.path and the original module object afterwards."""
+    import importlib
+    import fleet_registry as _orig
+
+    demo = ROOT / "apps" / "daily-production-digest" / "demo"
+    assert (demo / "fleet_registry.py").exists()
+    saved_path = list(sys.path)
+    try:
+        sys.path.insert(0, str(demo))          # what data_loader does at runtime
+        if str(ROOT) in sys.path:
+            sys.path.remove(str(ROOT))
+        sys.path.insert(0, str(ROOT))          # what the heal now guarantees
+        sys.modules.pop("fleet_registry", None)
+        fresh = importlib.import_module("fleet_registry")
+        assert Path(fresh.__file__).resolve() == (ROOT / "fleet_registry.py").resolve()
+        assert hasattr(fresh, "ctb_for") and hasattr(fresh, "surface_latlon")
+    finally:
+        sys.path[:] = saved_path
+        sys.modules["fleet_registry"] = _orig  # preserve module identity for the suite
