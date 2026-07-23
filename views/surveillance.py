@@ -31,40 +31,27 @@ def _sync_surv_well() -> None:
     st.session_state["well_id"] = st.session_state["surv_well"]
 
 
-# Approximate centroids of the Permian counties the fleet registry uses, so the map
-# is geographically honest at the county level (per-well coordinates are synthetic
-# jitter within the county — the registry carries no real lat/long).
-_COUNTY_LATLON = {
-    "Martin": (32.30, -101.95), "Midland": (31.87, -102.03),
-    "Howard": (32.31, -101.44), "Glasscock": (31.87, -101.52),
-    "Reeves": (31.42, -103.69), "Loving": (31.85, -103.58),
-    "Ward": (31.51, -103.10), "Culberson": (31.44, -104.52),
-}
 _TIER_COLOR = {"down": "#b42318", "watch": "#d9a015", "healthy": "#1b7a3d"}
-
-
-def _well_latlon(well_id: str, area: str) -> tuple[float, float]:
-    """Deterministic synthetic lat/long: county centroid + a stable jitter seeded off
-    the well number (≈ within-county spread). Synthetic by design."""
-    county = area.split(" Co.")[0].strip()
-    lat0, lon0 = _COUNTY_LATLON.get(county, (31.8, -102.5))
-    rng = np.random.default_rng(fleet_registry._suffix(well_id) * 2654435761 % (2 ** 32))
-    return lat0 + float(rng.uniform(-0.13, 0.13)), lon0 + float(rng.uniform(-0.16, 0.16))
+_TIER_SIZE = {"down": 16, "watch": 12, "healthy": 9}
 
 
 def _fleet_map(fleet: dict, price: float) -> None:
-    """Tier-colored map of the fleet (Spotfire/OFM/Avocet all open on a map). Coloured
-    green / amber / red by live health tier."""
+    """Tier-colored, CLICKABLE map of the fleet (Spotfire/OFM/Avocet all open on a
+    map). Coloured green / amber / red by live health tier; clicking a well loads it
+    into the per-well drill-down below (and the global Well File selection)."""
     import core
     board = c.board_with_deferred(price, st.session_state.get("nri", 0.80))
     tiers = core.well_tiers(fleet, board)
     rows = []
     for wid in fleet:
-        meta = fleet_registry.get(str(wid))
-        lat, lon = _well_latlon(str(wid), meta.area)
-        tier = tiers.get(str(wid), "healthy")
-        rows.append({"lat": lat, "lon": lon, "color": _TIER_COLOR[tier],
-                     "size": 220 if tier == "down" else (150 if tier == "watch" else 90)})
+        wid = str(wid)
+        meta = fleet_registry.get(wid)
+        lat, lon = fleet_registry.surface_latlon(wid)
+        tier = tiers.get(wid, "healthy")
+        rows.append({"well_id": wid, "lat": lat, "lon": lon, "tier": tier,
+                     "color": _TIER_COLOR[tier], "size": _TIER_SIZE[tier],
+                     "hover": (f"{wid} · {meta.name}<br>{meta.lift} · {meta.ctb}"
+                               f"<br>{meta.basin} · {meta.formation} · {tier}")})
     mdf = pd.DataFrame(rows)
     n = {"down": 0, "watch": 0, "healthy": 0}
     for w in fleet:
@@ -74,14 +61,50 @@ def _fleet_map(fleet: dict, price: float) -> None:
         + pt.pill(f"{n['watch']} watch", "warn" if n["watch"] else "ok") + " "
         + pt.pill(f"{n['down']} down", "bad" if n["down"] else "ok"),
         unsafe_allow_html=True)
-    try:
-        st.map(mdf, latitude="lat", longitude="lon", color="color", size="size")
-    except Exception:  # noqa: BLE001 — older streamlit map signature
-        st.map(mdf[["lat", "lon"]])
+    fig = go.Figure(go.Scattermap(
+        lat=mdf["lat"], lon=mdf["lon"], mode="markers",
+        marker=dict(size=mdf["size"], color=mdf["color"], opacity=0.9),
+        customdata=mdf["well_id"], hovertext=mdf["hover"], hoverinfo="text"))
+    fig.update_layout(
+        map=dict(style="open-street-map",
+                 center=dict(lat=float(mdf["lat"].mean()),
+                             lon=float(mdf["lon"].mean())),
+                 zoom=6.1),
+        height=430, margin=dict(l=0, r=0, t=6, b=0), showlegend=False)
+    event = st.plotly_chart(fig, key="surv_map", on_select="rerun",
+                            selection_mode="points", width="stretch")
+    _apply_map_selection(event)
     theme.source_note(
-        "Well locations are SYNTHETIC — each well's real Permian county (from the fleet "
-        "registry) placed at the county centroid with a deterministic within-county "
-        "jitter. Colour is the live health tier (green healthy / amber watch / red down).")
+        "Click a well to load it in the per-well drill-down below (also sets the "
+        "global Well File selection). Well locations are SYNTHETIC — each well's real "
+        "Permian county (from the fleet registry) placed at the county centroid with a "
+        "deterministic within-county jitter. Colour is the live health tier (green "
+        "healthy / amber watch / red down).")
+
+
+def _apply_map_selection(event) -> None:
+    """Route a map click into the global selected well. None-safe (the AppTest
+    harness renders with no selection) and deduped with a session sentinel —
+    Plotly selection state persists across reruns, so without the sentinel the page
+    would re-jump to the clicked well on every rerun."""
+    try:
+        pts = list(event.selection.points) if event is not None else []
+    except Exception:  # noqa: BLE001
+        pts = []
+    if not pts:
+        # Deselect (empty selection event) — clear the sentinel so the user can
+        # re-select the same well from the map later (click A → dropdown B →
+        # click A again must work).
+        st.session_state.pop("_surv_map_handled", None)
+        return
+    cd = pts[0].get("customdata")
+    wid = str(cd[0] if isinstance(cd, (list, tuple)) else cd) if cd is not None else ""
+    if not wid or st.session_state.get("_surv_map_handled") == wid:
+        return
+    st.session_state["_surv_map_handled"] = wid
+    # The map renders ABOVE the drill-down selectbox, whose pre-sync reads well_id
+    # before the widget instantiates — so the clicked well lands preselected this run.
+    st.session_state["well_id"] = wid
 
 
 def render() -> None:
@@ -101,6 +124,30 @@ def render() -> None:
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
 
+    tab_live, tab_ew = st.tabs(["Live Surveillance", "Early Warning · Deep AI"])
+    with tab_live:
+        _live_body(fleet, price)
+    with tab_ew:
+        _early_warning(fleet)
+
+
+def _live_body(fleet: dict, price: float) -> None:
+    """Spotfire-style live surveillance — fleet rate-time, type-curve check, fleet
+    map, and the lift-aware per-well drill-down. The original Surveillance body,
+    now the first tab alongside the deep Early-Warning detector."""
+    all_ids = [str(w) for w in fleet]
+    with st.expander("Filters — CTB · lift type · basin · county", expanded=False):
+        keep = c.fleet_filter_controls("surv", all_ids)
+    keepset = set(keep)
+    if len(keep) < len(all_ids):
+        fleet = {w: df for w, df in fleet.items() if str(w) in keepset}
+        st.caption(f"Filtered: **{len(fleet)} of {len(all_ids)}** wells — the KPIs, "
+                   "charts, map, and drill-down list below reflect the filtered "
+                   "selection only.")
+        if not fleet:
+            pt.empty_state("No wells match the active filters.",
+                           "Clear a filter above to bring wells back.")
+            return
     ff, n = _fleet_frame(fleet)
     if ff.empty:
         pt.empty_state("No production in the fleet.")
@@ -155,16 +202,20 @@ def render() -> None:
     pt.section("Per-Well Surveillance",
                "Drill into any well — production streams plus the diagnostics that "
                "matter for its artificial-lift type.")
-    ids = c.scada_well_ids()
+    ids = [w for w in c.scada_well_ids() if w in keepset] or c.scada_well_ids()
     cur = st.session_state.get("well_id") or (ids[0] if ids else None)
     if st.session_state.get("surv_well") != cur and cur in ids:
         st.session_state["surv_well"] = cur
+    if st.session_state.get("surv_well") not in ids and ids:
+        # active filters excluded the previously-picked well — keep the widget valid
+        st.session_state["surv_well"] = ids[0]
     wsel = st.selectbox("Well", ids, key="surv_well", on_change=_sync_surv_well,
                         help="Also sets the globally-selected well for Well 360 / "
                              "Action Chain.")
     meta = fleet_registry.get(wsel)
     st.markdown(
         pt.pill(f"{meta.lift} lift", "info") + " " +
+        pt.pill(f"{meta.ctb}", "muted") + " " +
         pt.pill(f"{meta.basin} · {meta.formation}", "muted") + " " +
         pt.pill(f"{meta.lateral_length_ft:,} ft lateral", "muted"),
         unsafe_allow_html=True)
@@ -252,7 +303,7 @@ def _typecurve_chart(ff: pd.DataFrame) -> None:
     if var_pct < -1:
         st.caption("The fleet is producing **below** its decline trend — downtime "
                    "and underperformance are deferring barrels. The Morning Brief "
-                   "and Triage Board rank the wells driving the gap.")
+                   "and Optimization Board rank the wells driving the gap.")
     else:
         st.caption("The fleet is tracking its expected decline — no material "
                    "fleet-wide deferment beyond normal decline.")
@@ -305,3 +356,93 @@ def _well_charts(df, meta, win: int) -> None:
                        "and downhole pressure carry the review."}.get(meta.lift, "")
     if note:
         theme.source_note(note)
+
+
+# ---- Early Warning · deep anomaly detection (optional torch) ------------------
+# An LSTM autoencoder (dl/) trained ONLY on healthy wells; reconstruction error on
+# each well's latest window is the anomaly score. It catches the slow, multivariate
+# drift the single-channel rate-drop alarm is blind to. The scoring lives in
+# dl/score.py (shared with the Morning Brief); torch is an OPTIONAL extra, so this
+# tab degrades to a readable install/train prompt when it (or the model) is absent.
+
+
+def _early_warning(fleet: dict) -> None:
+    pt.section("Early Warning — Deep Anomaly Detection",
+               "An LSTM autoencoder trained only on healthy wells scores each well by "
+               "how far its latest behaviour drifts from 'normal' — catching the slow, "
+               "multivariate degradation the single-channel rate-drop alarm misses.")
+
+    from dl import model as dl_model, score as dl_score
+    if not dl_model.torch_available():
+        st.info("This tab needs the optional deep-learning extras:\n\n"
+                "```bash\npip install -r requirements-dl.txt\n```")
+        return
+    if not dl_score.model_ready():
+        st.warning("The detector isn't trained yet — train it once (~30s):\n\n"
+                   "```bash\npython -m dl.train\n```")
+        return
+
+    # backtest credibility line (from the committed eval, if present)
+    import json
+    try:
+        ev = json.loads((dl_score.ARTIFACTS / "eval_report.json").read_text())
+        pt.context_bar([
+            ("Detector", "LSTM autoencoder (unsupervised)"),
+            ("Backtest PR-AUC", f"{ev['autoencoder']['pr_auc']:.2f} "
+             f"vs {ev['robust_z_baseline']['pr_auc']:.2f} rate-drop alarm"),
+            ("Trained on", "healthy wells only"),
+        ])
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not st.button("Run early-warning scan", type="primary", key="ew_scan"):
+        st.caption("Scores the whole fleet through the autoencoder and ranks wells "
+                   "by drift — flagging early degraders before they trip the alarm.")
+        return
+
+    with st.spinner("Scoring the fleet with the autoencoder…"):
+        df = c.early_warning_flags(c.scada_token())
+    if df.empty:
+        pt.empty_state("No wells with a full window to score.")
+        return
+
+    deep_only = df[df["deep_only"]]
+    pt.kpi_row([
+        {"label": "Wells Scored", "value": f"{len(df)}"},
+        {"label": "Early-Warning Flags", "value": f"{int(df['flagged'].sum())}",
+         "help": "Wells in the top 15% by drift score."},
+        {"label": "Deep-Only Catches", "value": f"{len(deep_only)}",
+         "delta": "missed by the rate-drop alarm", "delta_color": "inverse",
+         "help": f"Flagged by the autoencoder but below the rate-drop alarm's "
+                 f"|z|≥{dl_score.ALARM_Z} threshold — slow drift the point alarm can't see."},
+    ])
+
+    pt.section("Fleet Drift Leaderboard", "Top wells by reconstruction error — the "
+               "ones drifting furthest from healthy. Red = the rate-drop alarm would "
+               "miss it (deep-only catch).")
+    top = df.head(15).iloc[::-1]
+    fig = go.Figure(go.Bar(
+        x=top["score"], y=top["well"], orientation="h",
+        marker_color=[theme.RED if d else theme.BLUE for d in top["deep_only"]],
+        text=[f"{d}" for d in top["driver"]], textposition="outside",
+        hovertext=[f"drift {s:.3f} · max|z| {z:.1f} · driver: {d}"
+                   for s, z, d in zip(top["score"], top["maxz"], top["driver"])],
+        hoverinfo="text"))
+    fig.update_layout(xaxis_title="Reconstruction error (drift score)", yaxis_title="")
+    st.plotly_chart(theme.style_fig(fig, height=460), width="stretch")
+
+    show = df.head(20).copy()
+    show["Drift score"] = show["score"].map(lambda v: f"{v:.3f}")
+    show["Rate-drop alarm"] = np.where(show["alarm"], "would fire", "silent")
+    show["Early warning"] = np.where(show["flagged"], "⚠ flagged", "—")
+    st.dataframe(
+        show[["well", "Drift score", "driver", "Rate-drop alarm", "Early warning"]]
+        .rename(columns={"well": "Well", "driver": "Top drifting channel"}),
+        width="stretch", hide_index=True)
+    theme.source_note(
+        "Drift score = mean reconstruction error of the well's latest window through "
+        "an LSTM autoencoder trained on healthy wells only; the top drifting channel "
+        "is the one with the largest reconstruction error. The rate-drop alarm column "
+        f"is the shipped robust median/MAD z-score (|z| ≥ {dl_score.ALARM_Z}). "
+        "Thresholds (top-15% flag, alarm |z|) are illustrative. Backtest detail on "
+        "**Methods & Limitations** and in dl/README.md.")

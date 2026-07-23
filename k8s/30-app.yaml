@@ -1,0 +1,53 @@
+# The Operations Center app. Reads OPS_PG_DSN from the Secret and dials the
+# in-cluster pgvector Service. Probes use Streamlit's built-in health endpoint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-center
+  namespace: ops-center
+  labels: { app: ops-center }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: ops-center }
+  template:
+    metadata:
+      labels: { app: ops-center }
+    spec:
+      containers:
+        - name: ops-center
+          # Local cluster: build with `docker build -t ops-center:dev .`
+          # EKS: push to ECR and set this to <acct>.dkr.ecr.<region>.amazonaws.com/ops-center:<tag>
+          image: ops-center:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+              name: http
+          envFrom:
+            - secretRef:
+                name: ops-center-secrets
+          readinessProbe:
+            httpGet: { path: /_stcore/health, port: 8501 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /_stcore/health, port: 8501 }
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "250m", memory: "768Mi" }
+            limits:   { cpu: "1",    memory: "1536Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ops-center
+  namespace: ops-center
+  labels: { app: ops-center }
+spec:
+  type: ClusterIP          # port-forward locally; LoadBalancer/Ingress on EKS
+  selector: { app: ops-center }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8501

@@ -74,10 +74,11 @@ def render() -> None:
         ("Today's digest", "flagged" if flagged else "not flagged (fleet scan)"),
     ])
 
-    # ---- status verdict (from the triage tiers) --------------------------------
+    # ---- status verdict (from the board tiers) ---------------------------------
     board = c.board_with_deferred(price, nri)
     brow = board[board["well_id"] == well_id]
-    _status_banner(brow, hist, price, nri)
+    ev_days = c.ongoing_event_days(c.DISK_TOKEN, price)
+    _status_banner(brow, hist, price, nri, ev_days.get(str(well_id)))
 
     # ---- identity --------------------------------------------------------------
     mh = st.columns(4)
@@ -217,8 +218,10 @@ def render() -> None:
     theme.references(["arps", "shap", "npv"])
 
 
-def _status_banner(brow, hist, price: float, nri: float) -> None:
-    """A one-line verdict: opportunity / watch / stable, with the economics."""
+def _status_banner(brow, hist, price: float, nri: float,
+                   event_days: int | None = None) -> None:
+    """A one-line verdict: opportunity / watch / stable, with the economics — plus
+    the open-event downtime context (verify post-restart before acting)."""
     if not len(brow):
         return
     r = brow.iloc[0]
@@ -243,6 +246,11 @@ def _status_banner(brow, hist, price: float, nri: float) -> None:
     chips = (pill + " "
              + pt.pill(f"deferred ${deferred:,.0f}/day", "warn" if deferred else "muted")
              + " " + pt.pill(f"{hist['n_workovers']} prior jobs", "info"))
+    if event_days:
+        chips += " " + pt.pill(f"ongoing event {event_days}d — verify post-restart",
+                               "warn")
+        msg += (f" ⚠ This well is in an OPEN downtime event ({event_days}d running) — "
+                "verify the post-restart rate before acting on any recommendation.")
     st.markdown(chips, unsafe_allow_html=True)
     st.caption(msg)
 

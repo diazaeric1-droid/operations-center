@@ -38,18 +38,59 @@ def render() -> None:
     import core
     fleet, evc, daily = c.deferment_data(c.loss_source_token(source), price)
     A = core.deferment_analytics
+
+    # ---- display conventions (PE feedback OC8 + OC9): bbl-first + gross/net ----
+    uc1, uc2 = st.columns([2, 2])
+    with uc1:
+        units = st.radio("Show deferment in", ["Barrels", "Dollars"],
+                         key="def_units", horizontal=True,
+                         help="Barrels: the operational base-management read "
+                              "(default). Dollars: the same figures at the deck "
+                              "oil price.")
+    with uc2:
+        net_view = c.gross_net_toggle()
+    in_bbl = units == "Barrels"
+    if net_view:
+        daily = _net_daily(daily)
+        st.caption("**NET view:** every volume and dollar below is net entitlement — "
+                   "each well's barrels × its OWN NRI (registry default, editable on "
+                   "Sources & BYOD). Ratios (efficiency, % deferred) are unchanged."
+                   + (" Per-well NRI on a non-synthetic source is illustrative "
+                      "registry data." if is_real else ""))
+
     k = A.fleet_kpis(daily, price)
     if not k:
         pt.empty_state("No production records in the active source.")
         return
     rec = A.recovery_opportunity(daily)
+    pareto = A.pareto_by_cause(daily)
 
+    if in_bbl:
+        deferred_kpi = {
+            "label": "Deferred", "value": f"{k['deferred_bbl']:,.0f} bbl",
+            "delta": f"{k['pct_deferred']:.1f}% of potential",
+            "delta_color": "inverse",
+            "help": f"≈ ${k['deferred_usd']:,.0f} at the deck price."}
+        rec_kpi = {
+            "label": "Recoverable Opportunity",
+            "value": f"{float(pareto.loc[pareto['recoverable'], 'deferred_bbl'].sum()) if len(pareto) else 0.0:,.0f} bbl",
+            "help": "Recoverable-cause barrels — excludes planned + reservoir "
+                    f"losses. ≈ ${rec['recoverable_usd']:,.0f} at the deck price."}
+    else:
+        deferred_kpi = {
+            "label": "Deferred", "value": f"${k['deferred_usd']:,.0f}",
+            "delta": f"{k['pct_deferred']:.1f}% of potential",
+            "delta_color": "inverse",
+            "help": f"{k['deferred_bbl']:,.0f} bbl at the deck price."}
+        rec_kpi = {
+            "label": "Recoverable Opportunity",
+            "value": f"${rec['recoverable_usd']:,.0f}",
+            "help": "Excludes planned + reservoir losses (you can't get those "
+                    "barrels back)."}
     kpis = [
         {"label": "Production Efficiency", "value": f"{k['uptime_pct']:.1f}%",
          "help": "Actual ÷ potential over the period."},
-        {"label": "Deferred", "value": f"${k['deferred_usd']:,.0f}",
-         "delta": f"{k['pct_deferred']:.1f}% of potential",
-         "delta_color": "inverse"},
+        deferred_kpi,
         {"label": "Deferred Rate", "value": f"{k['deferred_bopd_avg']:,.0f} BOPD",
          "help": "Deferred volume ÷ calendar days in the period."},
     ]
@@ -63,10 +104,7 @@ def render() -> None:
         ]
     else:
         kpis += [
-            {"label": "Recoverable Opportunity",
-             "value": f"${rec['recoverable_usd']:,.0f}",
-             "help": "Excludes planned + reservoir losses (you can't get those "
-                     "barrels back)."},
+            rec_kpi,
             {"label": "Reason-Code Capture",
              "value": f"{k['capture_rate_pct']:.0f}%",
              "delta": "coding gap" if k["capture_rate_pct"] < 90 else "good",
@@ -74,13 +112,15 @@ def render() -> None:
         ]
     pt.kpi_row(kpis)
     period = _period_label(daily)
+    conv = ("net entitlement (per-well NRI)" if net_view
+            else "gross (8/8 working interest)")
     st.caption(f"Period: **{period}** · {k['n_wells']} wells · all deferment figures "
-               "below are over this period. Deferment $ is gross (8/8 working "
-               "interest) at the deck oil price — the standard base-management book; "
-               "net-to-operator economics live on the Triage Board / Action Chain.")
+               f"below are over this period, shown {conv} at the deck oil price — "
+               "the base-management book; certified net-to-operator economics live "
+               "on the Optimization Board / Action Chain.")
 
     if not is_real:
-        _deferment_buckets(A, daily, price)
+        _deferment_buckets(A, daily, price, in_bbl)
 
     left, right = st.columns(2)
     with left:
@@ -125,6 +165,8 @@ def render() -> None:
     if is_real:
         disp["top_cause"] = "N/A (uncoded)"
     disp.columns = ["Well", "Deferred bbl", "Deferred $", "Dominant Cause", "Uptime"]
+    if not in_bbl:  # dollars mode leads with the $ column
+        disp = disp[["Well", "Deferred $", "Deferred bbl", "Dominant Cause", "Uptime"]]
     st.dataframe(disp, width="stretch", hide_index=True)
     st.download_button("Download deferment summary (CSV)",
                        data=top.to_csv(index=False),
@@ -154,10 +196,26 @@ def _period_label(daily) -> str:
         return "full available history"
 
 
-def _deferment_buckets(A, daily, price: float) -> None:
-    """Deferred $ bucketed into operational categories (artificial lift, surface
+def _net_daily(daily):
+    """View-layer NET entitlement copy of the daily deferment table: every volume /
+    dollar column scaled by each row's well NRI (session override → registry
+    default). Ratios (uptime, % deferred) are unchanged. The vendored analytics are
+    untouched — they just receive net-entitlement inputs."""
+    out = daily.copy()
+    factor = out["well_id"].astype(str).map(
+        c.nri_map(out["well_id"].astype(str).unique()))
+    for col in ("total_def", "deferred_usd", "potential", "potential_vol",
+                "bopd", "actual_vol"):
+        if col in out.columns:
+            out[col] = out[col] * factor
+    return out
+
+
+def _deferment_buckets(A, daily, price: float, in_bbl: bool) -> None:
+    """Deferred bbl/$ bucketed into operational categories (artificial lift, surface
     facility, power, gathering, wellbore, planned, weather, reservoir) — where the
-    downtime concentrates and how much is genuinely recoverable."""
+    downtime concentrates and how much is genuinely recoverable. ``in_bbl`` switches
+    the whole panel between barrels (default, per PE feedback) and dollars."""
     pareto = A.pareto_by_cause(daily)
     pt.section("Deferment Buckets by Category",
                "Every lost barrel bucketed into its operational category — where the "
@@ -165,34 +223,40 @@ def _deferment_buckets(A, daily, price: float) -> None:
     if not len(pareto):
         st.caption("No classified deferment in the period.")
         return
+    val_col = "deferred_bbl" if in_bbl else "deferred_usd"
+    fmt = (lambda v: f"{v:,.0f} bbl") if in_bbl else (lambda v: f"${v:,.0f}")
     colors = [theme.BLUE if r else theme.GREY for r in pareto["recoverable"]]
     bf = go.Figure(go.Bar(
-        x=pareto["deferred_usd"], y=pareto["label"], orientation="h",
+        x=pareto[val_col], y=pareto["label"], orientation="h",
         marker_color=colors,
-        text=[f"${v:,.0f} · {p:.0f}%"
-              for v, p in zip(pareto["deferred_usd"], pareto["pct_of_total"])],
+        text=[f"{fmt(v)} · {p:.0f}%"
+              for v, p in zip(pareto[val_col], pareto["pct_of_total"])],
         textposition="auto",
-        hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>"))
-    bf.update_layout(xaxis_title="Deferred $ (gross, at deck price)", yaxis_title="")
+        hovertemplate=("<b>%{y}</b><br>%{x:,.0f} bbl<extra></extra>" if in_bbl
+                       else "<b>%{y}</b><br>$%{x:,.0f}<extra></extra>")))
+    bf.update_layout(
+        xaxis_title=("Deferred bbl (at the displayed interest convention)" if in_bbl
+                     else "Deferred $ (at deck price, displayed interest convention)"),
+        yaxis_title="")
     st.plotly_chart(
         theme.style_fig(bf, height=max(260, 34 * len(pareto) + 70), legend=False),
         width="stretch")
     st.caption("Blue = recoverable by operator action · grey = planned / reservoir / "
                "uncaptured (you can't get those barrels back).")
 
-    recoverable = float(pareto.loc[pareto["recoverable"], "deferred_usd"].sum())
+    recoverable = float(pareto.loc[pareto["recoverable"], val_col].sum())
     planned_res = float(pareto.loc[~pareto["recoverable"]
                                    & (pareto["reason_key"] != "unclassified"),
-                                   "deferred_usd"].sum())
+                                   val_col].sum())
     uncaptured = float(pareto.loc[pareto["reason_key"] == "unclassified",
-                                  "deferred_usd"].sum())
+                                  val_col].sum())
     m = st.columns(3)
-    m[0].metric("Recoverable", f"${recoverable:,.0f}",
+    m[0].metric("Recoverable", fmt(recoverable),
                 help="Operator-addressable categories — the real recovery target "
                      "(excludes planned, reservoir, and uncaptured).")
-    m[1].metric("Planned / Reservoir", f"${planned_res:,.0f}",
+    m[1].metric("Planned / Reservoir", fmt(planned_res),
                 help="Expected work or physics-driven decline — not an opportunity.")
-    m[2].metric("Uncaptured (coding gap)", f"${uncaptured:,.0f}",
+    m[2].metric("Uncaptured (coding gap)", fmt(uncaptured),
                 help="Deferment with no operator reason code — a data-quality gap to "
                      "close, NOT a root cause. It is excluded from the recovery "
                      "target rather than counted as a category to 'fix'.")

@@ -48,6 +48,7 @@ def render() -> None:
     div = core.production_divergence_summary(fleet, anomalies)
     net_deferred = sum(float(getattr(a, "deferred_bopd", 0.0) or 0.0)
                        for a in active) * price * nri
+    ew_md, ew_deep = _early_warning(token)   # deep-drift catches (optional torch)
 
     sev = pd.Series([a.severity for a in active]).value_counts() if active else {}
     pt.kpi_row([
@@ -76,6 +77,84 @@ def render() -> None:
     fs[2].metric("Water Cut", f"{summary['water_cut_pct']:.0f}%")
     fs[3].metric("Avg Runtime", f"{summary['avg_runtime_pct']:.0f}%")
 
+    # ---- one list vs the classic panels (PE feedback OC4) ----------------------
+    events = c.replay_events(token, price, False)
+    vc1, vc2 = st.columns([2, 2])
+    with vc1:
+        st.radio("View", ["Unified list", "Detailed panels"], key="brief_view",
+                 horizontal=True,
+                 help="Unified list (default): ONE ranked list — new, ongoing, and "
+                      "just-resolved events plus scan-only anomalies — ordered by "
+                      "BO/day impact. Detailed panels: the classic three-panel "
+                      "layout (wells down / divergences, ranked anomalies, "
+                      "acknowledged).")
+    with vc2:
+        net_view = c.gross_net_toggle()
+    if st.session_state.get("brief_view", "Unified list") == "Detailed panels":
+        _detailed_panels(div, active, acked, anomalies, ew_deep, price, nri)
+    else:
+        _unified_list(events, active, net_view, price)
+
+    _the_brief(token, price, nri, as_of, summary, anomalies, div, events, ew_md)
+
+    theme.references(["arps", "deferment"])
+
+
+def _unified_list(events, active, net_view: bool, price: float) -> None:
+    """OC4: one ranked list — events (NEW / ONGOING / RESOLVED) + scan-only
+    anomalies, ordered by today's BO/day impact (net of per-well NRI when the NET
+    toggle is on). Select a row to open the well on Surveillance."""
+    pt.section("Unified Priority List",
+               "Everything that needs eyes, in ONE list: new + ongoing + "
+               "just-resolved events and scan-only anomalies, ordered by today's "
+               "BO/day impact.")
+    nmap = c.nri_map({str(e.well_id) for e in (events or [])}
+                     | {str(a.well_id) for a in (active or [])})
+    df = c.unified_brief_frame(events, active, nmap, net_view, price)
+    if df.empty:
+        st.success("Nothing to chase — no open events or active anomalies on the "
+                   "latest scan.")
+        return
+    counts = df["status"].value_counts()
+    st.markdown(
+        pt.pill(f"{int(counts.get('NEW', 0))} new",
+                "bad" if counts.get("NEW", 0) else "ok") + " "
+        + pt.pill(f"{int(counts.get('ONGOING', 0))} ongoing",
+                  "warn" if counts.get("ONGOING", 0) else "ok") + " "
+        + pt.pill(f"{int(counts.get('RESOLVED', 0))} resolved", "ok"),
+        unsafe_allow_html=True)
+    badge = {"NEW": "🔴 NEW", "ONGOING": "🟠 ONGOING", "RESOLVED": "🟢 RESOLVED"}
+    usd_lbl = "$ /day (net, well NRI)" if net_view else "$ /day (gross)"
+    show = pd.DataFrame({
+        "Well": df["well_id"],
+        "Status": df["status"].map(badge),
+        "Event / Category": df["kind"].str.replace("_", " "),
+        "Days": df["days"].map(lambda v: "—" if pd.isna(v) else f"{int(v)}d"),
+        "BO/day (gross)": df["gross_bopd"].map(lambda v: f"{v:,.1f}"),
+        "BO/day (net, well NRI)": df["net_bopd"].map(lambda v: f"{v:,.1f}"),
+        usd_lbl: df["usd_per_day"].map(lambda v: f"${v:,.0f}"),
+        "Cum. deferred bbl": df["cum_bbl"].map(
+            lambda v: "—" if pd.isna(v) else f"{v:,.0f}"),
+    })
+    ev = st.dataframe(show, width="stretch", hide_index=True,
+                      on_select="rerun", selection_mode="single-row",
+                      key="mb_unified")
+    c.handle_row_jump(ev, df, "_mb_jump")
+    theme.source_note(
+        f"Ordered by {'NET' if net_view else 'GROSS'} BO/day (today's deferral; "
+        "resolved events close out at 0 and fall to the bottom), status as the "
+        "tiebreaker. NET = × each well's OWN NRI (registry default, editable on "
+        "Sources & BYOD); GROSS is the digest's native 8/8 convention. Where a well "
+        "has both an open event and a scan anomaly, the event's deferral is shown "
+        "(the two windows differ slightly). 'Days' is the event's running duration — "
+        "scan-only anomalies have no event yet ('—'). Select a row to open the well "
+        "on Surveillance. The classic panels are under **View → Detailed panels**.")
+
+
+def _detailed_panels(div, active, acked, anomalies, ew_deep, price: float,
+                     nri: float) -> None:
+    """The original three-panel layout (wells down / divergences, ranked anomalies,
+    deep drift, acknowledged) — unchanged, behind the view toggle."""
     pt.section("Wells Down & Production Divergences",
                "Who is OFF, and who is producing below decline — the first thing a "
                "foreman triages at 6:30am.")
@@ -147,6 +226,21 @@ def render() -> None:
             "rate-drop vs. the expected Arps rate — no fixed thresholds, so one bad "
             "day can't inflate the baseline.")
 
+    if ew_deep is not None and not ew_deep.empty:
+        pt.section("Early Warning — Deep Drift",
+                   "Wells the deep autoencoder flags as drifting that the rate-drop "
+                   "alarm hasn't caught yet — slow degraders to review before they "
+                   "trip a hard alarm. (Full leaderboard on Surveillance → Early "
+                   "Warning · Deep AI.)")
+        ewt = ew_deep.head(10)[["well", "driver", "score"]].copy()
+        ewt["score"] = ewt["score"].map(lambda v: f"{v:.2f}")
+        ewt.columns = ["Well", "Top drifting channel", "Drift score"]
+        st.dataframe(ewt, width="stretch", hide_index=True)
+        theme.source_note(
+            "Deep early-warning flags from the LSTM autoencoder (trained on healthy "
+            "wells only); 'deep-only' = the rate-drop alarm did not fire. Surfaced "
+            "here so the daily brief catches slow drift automatically.")
+
     pt.section("Acknowledged / Suppressed",
                "Known or planned events (acknowledged.yml) — kept out of the active "
                "list so a planned workover doesn't re-fire HIGH every morning.")
@@ -159,16 +253,23 @@ def render() -> None:
     else:
         st.caption("Nothing is acknowledged/suppressed on the current scan.")
 
+
+def _the_brief(token: str, price: float, nri: float, as_of: str, summary,
+               anomalies, div, events, ew_md: str) -> None:
+    """'The Brief' + download + email — the product's output, rendered in BOTH
+    views (outside the unified/detailed toggle). Body unchanged."""
+    import core
     pt.section("The Brief",
                "Deterministic by default — same data an LLM would narrate, just "
                "templated. Add a key in the sidebar for the narrated version.")
-    events = c.replay_events(token, price, False)
     # Date the brief to the data's as-of day (not today's wall clock), then append
     # the Production Divergences & Wells Down section so the page and the emailed/
     # downloaded report carry the same content.
     brief_md = core.digest_brief.render_brief_markdown(
         summary, anomalies, brief_date=as_of, events=events)
     brief_md = brief_md + "\n\n" + core._divergence_section_md(div, price, nri)
+    if ew_md:
+        brief_md = brief_md + "\n\n" + ew_md
     llm_key = st.session_state.get("anthropic_key", "")
     col_a, col_b = st.columns([1, 3])
     with col_a:
@@ -185,7 +286,8 @@ def render() -> None:
                     summary, anomalies, client=Anthropic(api_key=llm_key),
                     events=events)
                 st.session_state["brief_md_llm"] = (
-                    narr + "\n\n" + core._divergence_section_md(div, price, nri))
+                    narr + "\n\n" + core._divergence_section_md(div, price, nri)
+                    + (("\n\n" + ew_md) if ew_md else ""))
         except Exception as exc:  # noqa: BLE001 — bad key / network: stay deterministic
             st.warning(f"Narrated brief unavailable ({type(exc).__name__}); "
                        "showing the deterministic brief.")
@@ -202,7 +304,35 @@ def render() -> None:
 
     _email_brief_ui(final_brief, f"Operations Center — Morning Brief {as_of}")
 
-    theme.references(["arps", "deferment"])
+
+# ---- Early Warning · deep drift (optional torch) -----------------------------
+# Surface the autoencoder's deep-only catches (drift the rate-drop alarm misses)
+# in the daily brief, so slow degraders show up automatically. Scoring lives in
+# dl/score.py (shared with Surveillance); torch is optional, so this is a silent
+# no-op when the extras / trained model are absent — the brief stays clean.
+def _early_warning_md(deep: pd.DataFrame) -> str:
+    """Brief section listing the deep-only catches (empty string if none)."""
+    if deep is None or deep.empty:
+        return ""
+    lines = [
+        "## Early Warning — Deep Drift Detector",
+        f"{len(deep)} well(s) are drifting from normal that the rate-drop alarm has "
+        "**not** flagged yet — early degraders to review before they trip a hard alarm:",
+    ]
+    for _, r in deep.head(8).iterrows():
+        lines.append(f"- **{r['well']}** — {r['driver']} drifting "
+                     f"(drift score {r['score']:.2f})")
+    return "\n".join(lines)
+
+
+def _early_warning(token: str) -> tuple[str, "pd.DataFrame | None"]:
+    """(brief markdown, deep-only frame) for the active fleet — ("", None) when the
+    deep detector isn't available."""
+    ew = c.early_warning_flags(token)
+    if ew is None or ew.empty:
+        return "", None
+    deep = ew[ew["deep_only"]]
+    return _early_warning_md(deep), deep
 
 
 def _email_brief_ui(brief_md: str, default_subject: str) -> None:

@@ -11,10 +11,10 @@ HARNESS = Path(__file__).resolve().parent / "view_harness.py"
 
 # The designed page map — section order and Title Case page titles.
 EXPECTED_NAV = {
-    "Today": ["Home", "Surveillance", "Morning Brief", "Triage Board",
+    "Today": ["Home", "Surveillance", "Morning Brief", "Optimization Board",
               "Ongoing Events"],
     "Loss Accounting": ["Deferment Overview", "Causes & Pareto",
-                        "Recovery Work Queue"],
+                        "Recovery Work Queue", "Note Search (RAG)"],
     "Well File": ["Well 360", "Action Chain"],
     "Data": ["Sources & BYOD", "Methods & Limitations"],
 }
