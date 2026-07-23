@@ -2,8 +2,8 @@
 
 **What broke overnight, what it's costing, and what to do first.**
 
-The morning-triage console for a production operation: surveillance → loss
-accounting → fleet triage → action chain, in one deterministic Streamlit app.
+The morning console for a production operation: surveillance → loss
+accounting → optimization board → action chain, in one deterministic Streamlit app.
 A foreman opens it at 6:30am and leaves with a ranked board and a
 decision-ready AFE — no API key required for any number on any page.
 
@@ -15,8 +15,9 @@ One of three consolidated operator products in the Upstream Copilot Suite
 | Section | Page | What it answers |
 |---|---|---|
 | Today | Home | The 6:30am landing: wells scanned, open alerts, deferred $/day, top opportunity |
-| Today | Triage Board | The whole fleet ranked by risked-NPV opportunity (action vs no-action tiers, CSV export) |
-| Today | Morning Brief | Overnight scan: deterministic detectors, money-first anomaly ranking, the brief itself (LLM narration optional) |
+| Today | Surveillance | Fleet rate-time + clickable fleet map (click a well to drill down) + CTB/lift/basin/county filters |
+| Today | Optimization Board | The whole fleet ranked by risked-NPV opportunity (tiers, downtime context, drill-through to Surveillance, CSV export) |
+| Today | Morning Brief | Overnight scan: unified ranked list (new + ongoing + resolved, by BO/day) or the classic detailed panels; the brief itself (LLM narration optional) |
 | Today | Ongoing Events | The event state machine — multi-day outages stay ONGOING with running duration + cumulative deferred bbl/$ |
 | Loss Accounting | Deferment Overview | Potential vs actual on the monthly book — downtime vs underperformance waterfall, % deferred |
 | Loss Accounting | Causes & Pareto | Reason-code attribution, $-Pareto by cause, capture rate, classifier eval |

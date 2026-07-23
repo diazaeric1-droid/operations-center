@@ -77,6 +77,84 @@ def render() -> None:
     fs[2].metric("Water Cut", f"{summary['water_cut_pct']:.0f}%")
     fs[3].metric("Avg Runtime", f"{summary['avg_runtime_pct']:.0f}%")
 
+    # ---- one list vs the classic panels (PE feedback OC4) ----------------------
+    events = c.replay_events(token, price, False)
+    vc1, vc2 = st.columns([2, 2])
+    with vc1:
+        st.radio("View", ["Unified list", "Detailed panels"], key="brief_view",
+                 horizontal=True,
+                 help="Unified list (default): ONE ranked list — new, ongoing, and "
+                      "just-resolved events plus scan-only anomalies — ordered by "
+                      "BO/day impact. Detailed panels: the classic three-panel "
+                      "layout (wells down / divergences, ranked anomalies, "
+                      "acknowledged).")
+    with vc2:
+        net_view = c.gross_net_toggle()
+    if st.session_state.get("brief_view", "Unified list") == "Detailed panels":
+        _detailed_panels(div, active, acked, anomalies, ew_deep, price, nri)
+    else:
+        _unified_list(events, active, net_view, price)
+
+    _the_brief(token, price, nri, as_of, summary, anomalies, div, events, ew_md)
+
+    theme.references(["arps", "deferment"])
+
+
+def _unified_list(events, active, net_view: bool, price: float) -> None:
+    """OC4: one ranked list — events (NEW / ONGOING / RESOLVED) + scan-only
+    anomalies, ordered by today's BO/day impact (net of per-well NRI when the NET
+    toggle is on). Select a row to open the well on Surveillance."""
+    pt.section("Unified Priority List",
+               "Everything that needs eyes, in ONE list: new + ongoing + "
+               "just-resolved events and scan-only anomalies, ordered by today's "
+               "BO/day impact.")
+    nmap = c.nri_map({str(e.well_id) for e in (events or [])}
+                     | {str(a.well_id) for a in (active or [])})
+    df = c.unified_brief_frame(events, active, nmap, net_view, price)
+    if df.empty:
+        st.success("Nothing to chase — no open events or active anomalies on the "
+                   "latest scan.")
+        return
+    counts = df["status"].value_counts()
+    st.markdown(
+        pt.pill(f"{int(counts.get('NEW', 0))} new",
+                "bad" if counts.get("NEW", 0) else "ok") + " "
+        + pt.pill(f"{int(counts.get('ONGOING', 0))} ongoing",
+                  "warn" if counts.get("ONGOING", 0) else "ok") + " "
+        + pt.pill(f"{int(counts.get('RESOLVED', 0))} resolved", "ok"),
+        unsafe_allow_html=True)
+    badge = {"NEW": "🔴 NEW", "ONGOING": "🟠 ONGOING", "RESOLVED": "🟢 RESOLVED"}
+    usd_lbl = "$ /day (net, well NRI)" if net_view else "$ /day (gross)"
+    show = pd.DataFrame({
+        "Well": df["well_id"],
+        "Status": df["status"].map(badge),
+        "Event / Category": df["kind"].str.replace("_", " "),
+        "Days": df["days"].map(lambda v: "—" if pd.isna(v) else f"{int(v)}d"),
+        "BO/day (gross)": df["gross_bopd"].map(lambda v: f"{v:,.1f}"),
+        "BO/day (net, well NRI)": df["net_bopd"].map(lambda v: f"{v:,.1f}"),
+        usd_lbl: df["usd_per_day"].map(lambda v: f"${v:,.0f}"),
+        "Cum. deferred bbl": df["cum_bbl"].map(
+            lambda v: "—" if pd.isna(v) else f"{v:,.0f}"),
+    })
+    ev = st.dataframe(show, width="stretch", hide_index=True,
+                      on_select="rerun", selection_mode="single-row",
+                      key="mb_unified")
+    c.handle_row_jump(ev, df, "_mb_jump")
+    theme.source_note(
+        f"Ordered by {'NET' if net_view else 'GROSS'} BO/day (today's deferral; "
+        "resolved events close out at 0 and fall to the bottom), status as the "
+        "tiebreaker. NET = × each well's OWN NRI (registry default, editable on "
+        "Sources & BYOD); GROSS is the digest's native 8/8 convention. Where a well "
+        "has both an open event and a scan anomaly, the event's deferral is shown "
+        "(the two windows differ slightly). 'Days' is the event's running duration — "
+        "scan-only anomalies have no event yet ('—'). Select a row to open the well "
+        "on Surveillance. The classic panels are under **View → Detailed panels**.")
+
+
+def _detailed_panels(div, active, acked, anomalies, ew_deep, price: float,
+                     nri: float) -> None:
+    """The original three-panel layout (wells down / divergences, ranked anomalies,
+    deep drift, acknowledged) — unchanged, behind the view toggle."""
     pt.section("Wells Down & Production Divergences",
                "Who is OFF, and who is producing below decline — the first thing a "
                "foreman triages at 6:30am.")
@@ -175,10 +253,15 @@ def render() -> None:
     else:
         st.caption("Nothing is acknowledged/suppressed on the current scan.")
 
+
+def _the_brief(token: str, price: float, nri: float, as_of: str, summary,
+               anomalies, div, events, ew_md: str) -> None:
+    """'The Brief' + download + email — the product's output, rendered in BOTH
+    views (outside the unified/detailed toggle). Body unchanged."""
+    import core
     pt.section("The Brief",
                "Deterministic by default — same data an LLM would narrate, just "
                "templated. Add a key in the sidebar for the narrated version.")
-    events = c.replay_events(token, price, False)
     # Date the brief to the data's as-of day (not today's wall clock), then append
     # the Production Divergences & Wells Down section so the page and the emailed/
     # downloaded report carry the same content.
@@ -220,8 +303,6 @@ def render() -> None:
                        mime="text/markdown")
 
     _email_brief_ui(final_brief, f"Operations Center — Morning Brief {as_of}")
-
-    theme.references(["arps", "deferment"])
 
 
 # ---- Early Warning · deep drift (optional torch) -----------------------------

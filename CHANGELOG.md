@@ -4,6 +4,61 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-07-23
+
+PE field-feedback round 1 — a practicing petroleum engineer reviewed the live console;
+every feasible item is implemented (the one data gap — no choke channel in the SCADA
+schema — is disclosed in-page rather than faked). The certified cores are untouched:
+`rank_fleet` parity with pe-pipeline stays bit-for-bit, all registry changes are
+purely additive, and per-well NRI lives only in view-layer display columns.
+
+### Added
+- **Clickable fleet map → per-well drill-down (OC1).** The Surveillance map is now a
+  Plotly scatter map (token-free OSM tiles): clicking a well loads it in the per-well
+  drill-down below and sets the global Well File selection (deselecting clears the
+  selection latch, so the same well can be re-picked from the map after switching
+  wells in the dropdown). Coordinates moved into
+  `fleet_registry.surface_latlon()` (same deterministic county-centroid + jitter
+  formula — no well moved) so every product surface shares one source.
+- **CTB / lift / basin / county filters (OC2).** A deterministic CTB (central tank
+  battery) assignment joined the registry (`ctb_for`, ~2 batteries per county);
+  shared filter controls on Surveillance AND the Optimization Board, with honest
+  "Filtered: N of M wells" captions (the board CSV export stays full-fleet).
+- **Downtime context on recommendations (OC3, honest version).** Recommendations for
+  wells in an OPEN state-machine event carry "⚠ in ongoing event Nd — verify
+  post-restart before acting" on the Optimization Board, Well 360, and the Action
+  Chain. The SCADA schema has no choke-position channel — disclosed in-page where
+  recommendations render (and on Methods) instead of inventing choke data.
+- **Per-well NRI + GROSS/NET views (OC9).** Deterministic, varied per-well NRI in the
+  registry (`nri_for`, ≈0.73–0.85 by basin/well) with a session-only `st.data_editor`
+  override table on Sources & BYOD; GROSS (8/8) vs NET (× per-well NRI) toggles on
+  the Morning Brief unified list, Optimization Board deferred-$ columns, and the
+  Deferment Overview. Certified chain/ranking economics keep the sidebar deck NRI
+  (relabeled "Deck NRI — chain economics"); the convention split is stated on Methods.
+- **Cross-page drill-through (OC6).** Shared `jump_to_well` mechanism (global
+  `well_id` + `st.switch_page`): selecting a row on the Optimization Board's
+  intervention / restore / watch tables or the Morning Brief unified list opens the
+  well on Surveillance with it preselected.
+- **Deferment in barrels (OC8).** A Barrels (default) / Dollars toggle threads
+  through the Deferment Overview KPIs, category buckets, and worst-offender table.
+
+### Changed
+- **Triage Board → Optimization Board (OC5).** Renamed everywhere user-visible (nav,
+  masthead, home cards, captions, README, tests; CSV now
+  `ops_optimization_board.csv`), including board-referential lowercase "triage"
+  wording in rendered captions, slider help, the product-switcher tagline, and the
+  README lede. The URL slug changed `triage-board` →
+  `optimization-board`, so old deep links 404. Internal module/function names kept.
+- **Morning Brief defaults to ONE unified list (OC4).** New + ongoing + resolved
+  events and scan-only anomalies in a single ranked list ordered by BO/day impact
+  (respecting the NRI toggle), status-badged; the classic three-panel layout is
+  intact behind a "Detailed panels" view toggle. "The Brief" + email are unchanged.
+
+### Registry (additive only — documented in the module docstring)
+- `surface_latlon` / `ctb_for` / `nri_for` + `lat`/`lon`/`ctb`/`nri` WellMeta
+  properties; META_COLUMNS gained `ctb` and `nri`. No existing field or value
+  changed; this copy diverges from sibling repos until they take the same block.
+
 ## [0.7.3] — 2026-06-16
 
 Scoped adversarial re-audit of the v0.7.0/v0.7.1 post-fix surface (a second 6-persona

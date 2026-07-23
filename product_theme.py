@@ -8,7 +8,7 @@ cross-product switcher, and a denser "enterprise console" CSS layer. Views impor
 ONLY this module:
 
     import product_theme as pt
-    pt.masthead("ops", "Triage Board", "Fleet ranked by risked-NPV opportunity")
+    pt.masthead("ops", "Optimization Board", "Fleet ranked by risked-NPV opportunity")
     pt.context_bar([("Asset", "Permian synthetic fleet"), ("Deck", "$70 · 80% NRI")])
     pt.kpi_row([{"label": "Open Alerts", "value": "7", "delta": "+2 vs yesterday"}])
 
@@ -27,13 +27,13 @@ from theme import (  # re-exported so views need a single import
     NAVY, BLUE, RED, GREEN, AMBER, PURPLE, TEAL, GREY, COLORWAY, CITATIONS,
 )
 
-PRODUCT_VERSION = "0.7.3"
+PRODUCT_VERSION = "0.8.0"
 
 # The three consolidated operator products. Each entry:
 #   (key, display name, tagline, live url)
 PRODUCTS = [
     ("ops", "Operations Center",
-     "Surveillance · loss accounting · triage",
+     "Surveillance · loss accounting · optimization",
      "https://operations-center.streamlit.app"),
     ("workbench", "Engineering Workbench",
      "Design · diagnose · predict · optimize",

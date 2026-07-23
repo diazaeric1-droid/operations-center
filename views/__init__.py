@@ -41,7 +41,10 @@ PAGES: dict[str, list[tuple[str, str, str, object, bool]]] = {
          surveillance.render, False),
         ("Morning Brief", ":material/article:", "morning-brief",
          morning_brief.render, False),
-        ("Triage Board", ":material/monitoring:", "triage-board",
+        # Renamed from the earlier "triage board" title per PE feedback (OC5) —
+        # module filename kept. The slug changed too ("triage-board" →
+        # "optimization-board"): old deep links 404, noted in the CHANGELOG.
+        ("Optimization Board", ":material/monitoring:", "optimization-board",
          triage_board.render, False),
         ("Ongoing Events", ":material/event_repeat:", "ongoing-events",
          ongoing_events.render, False),

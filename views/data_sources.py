@@ -20,6 +20,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+import fleet_registry
 import product_theme as pt
 import theme
 
@@ -83,7 +84,7 @@ def render() -> None:
         st.success(f"Active upload: **{st.session_state['scada_upload_name']}** "
                    f"({n_kb:,.0f} kB) — Morning Brief and Ongoing Events now run on "
                    "your fleet.")
-        st.caption("Triage Board, Well 360, and Action Chain stay on the bootstrapped "
+        st.caption("Optimization Board, Well 360, and Action Chain stay on the bootstrapped "
                    "synthetic fleet: the ESP risk model and the AFE chain read "
                    "per-well CSVs + a trained artifact tied to that fleet. The scan "
                    "and event lifecycle are schema-driven, so they run on yours.")
@@ -126,6 +127,15 @@ def render() -> None:
             st.rerun()
 
     st.divider()
+
+    # ---- Per-well NRI (session-only) — PE feedback OC9 --------------------------
+    pt.section("Per-Well NRI (session-only)",
+               "Very rarely is NRI really the same across a field. Edit any well's "
+               "net revenue interest here; the GROSS/NET toggles on the Morning "
+               "Brief, Optimization Board, and Deferment Overview use these values.")
+    _nri_editor()
+
+    st.divider()
     pt.section("Provenance Notes")
     st.markdown(
         "- **Synthetic SCADA fleet** (Today + Well File) — regenerated "
@@ -151,6 +161,66 @@ def render() -> None:
         "- **Anthropic key (sidebar)** — optional, session-only, never stored; "
         "powers narration only. Every number on every page is deterministic.")
     theme.references(["arps", "deferment"])
+
+
+def _nri_editor() -> None:
+    """Editable per-well NRI table. Registry defaults (deterministic, varied by
+    basin/well) + the session's current overrides; edits are diffed back into
+    ``st.session_state['nri_overrides']`` — session-only, nothing touches disk."""
+    ids = c.scada_well_ids()
+    if not ids:
+        pt.empty_state("No fleet loaded — run bootstrap (first app start).")
+        return
+    overrides = st.session_state.get("nri_overrides") or {}
+    metas = [fleet_registry.get(w) for w in ids]
+    defaults = {w: fleet_registry.nri_for(w) for w in ids}
+    base = pd.DataFrame({
+        "well_id": ids,
+        "name": [m.name for m in metas],
+        "ctb": [m.ctb for m in metas],
+        "nri": [float(overrides.get(w, defaults[w])) for w in ids],
+    })
+    edited = st.data_editor(
+        base, key="nri_editor", hide_index=True, height=320, width="stretch",
+        disabled=["well_id", "name", "ctb"],
+        column_config={
+            "well_id": st.column_config.TextColumn("Well"),
+            "name": st.column_config.TextColumn("Name"),
+            "ctb": st.column_config.TextColumn("CTB"),
+            "nri": st.column_config.NumberColumn(
+                "NRI", min_value=0.0, max_value=1.0, step=0.01, format="%.4f",
+                help="Net revenue interest (share of revenue after royalty), "
+                     "0–1. Edits apply for this session only."),
+        })
+    new_overrides = {}
+    for w, v in zip(edited["well_id"], edited["nri"]):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        v = min(max(v, 0.0), 1.0)
+        if abs(v - defaults[str(w)]) > 1e-9:
+            new_overrides[str(w)] = round(v, 4)
+    st.session_state["nri_overrides"] = new_overrides
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        if new_overrides:
+            st.caption(f"**{len(new_overrides)} well(s) overridden** (session only). "
+                       "Defaults are deterministic, varied registry values "
+                       "(≈0.73–0.85 by basin/well) — illustrative, not real "
+                       "ownership data.")
+        else:
+            st.caption("No overrides — every well is on its registry default NRI "
+                       "(deterministic, varied ≈0.73–0.85; illustrative, not real "
+                       "ownership data).")
+    with col_b:
+        if st.button("Reset NRI overrides"):
+            st.session_state["nri_overrides"] = {}
+            st.session_state.pop("nri_editor", None)
+            st.rerun()
+    st.caption("These per-well values drive the NET view on roll-up pages. The "
+               "certified chain/ranking economics (risked NPV, AFE) keep the "
+               "sidebar deck NRI — one auditable convention for capital decisions.")
 
 
 def _ingest_scada(up) -> None:
