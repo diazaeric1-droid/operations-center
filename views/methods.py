@@ -15,6 +15,11 @@ import theme
 
 from views import _common as c
 
+# The portfolio-wide probabilistic vocabulary — this exact sentence appears
+# verbatim on all three products' Methods pages (tests pin it).
+EXCEEDANCE_SENTENCE = ("Suite convention: Pxx = probability of exceedance — "
+                       "P10 is the high case, P90 the low case.")
+
 
 def render() -> None:
     c.ensure_state()
@@ -28,6 +33,19 @@ def render() -> None:
         ("Surveillance fleet", c.scada_source_label(c.DISK_TOKEN)),
         ("Stance", "deterministic math · LLM only narrates · honest about limits"),
     ])
+    c.page_purpose(
+        "**The question this page answers: how is every number on this console "
+        "computed — and exactly where does the synthetic demo stop standing in "
+        "for a real asset?**\n\n"
+        "- **When:** before you trust a number in front of a reviewer — this is "
+        "the model card and the conventions reference, in one place.\n"
+        "- **Headline read:** the economics conventions (risked NPV, PV10, NRI, "
+        "the P10/P90 exceedance convention), the failure-risk model's honest "
+        "eval (calibrated out-of-fold AUROC/Brier), and every backtest the "
+        "rankings are scored on.\n"
+        "- **Also here:** the canonical 'one word, three tiers' mapping of what "
+        "*watch* means on each page.\n"
+        "- **Next:** **Sources & BYOD** for dataset provenance and uploads.")
 
     pt.section("Economics — risked NPV & discounting")
     st.markdown(
@@ -45,6 +63,9 @@ def render() -> None:
         "uncertainties (incremental rate, uplift decline, realized price); its **base "
         "case** (mean of the inputs) reconciles exactly with the deterministic Net NPV, "
         "and the P50 sits slightly below it because the NPV distribution is right-skewed.\n"
+        f"- **{EXCEEDANCE_SENTENCE}** The Action Chain's Monte-Carlo labels follow "
+        "it (P10 ≥ P50 ≥ P90 for NPV), matching the SPE convention Engineering "
+        "Workbench's certified core enforces.\n"
         "- **Uplift horizon — a stated assumption.** Intervention NPVs book a **5-year** "
         "uplift tail declining at 0.6/yr. That fits a capital workover (ESP swap, rod-pump "
         "workover, acid stim) but is **generous for a short-scope job** such as a gas-lift "
@@ -167,6 +188,22 @@ def render() -> None:
         "SCADA schema carries **no choke-position channel**, so choke moves cannot be "
         "separated from reservoir/lift losses — a stated limitation (disclosed in-page "
         "where recommendations render), not something the console models.")
+
+    pt.section("One word, three tiers — what 'watch' means where")
+    st.markdown(
+        "The console uses **watch** in three distinct, page-scoped senses — one "
+        "canonical mapping:\n\n"
+        "- **Surveillance map amber ('watch')** — the live HEALTH tier: the well is "
+        "deferring production or sits in the fleet's top-quartile failure risk.\n"
+        "- **Home's 'Elevated Risk' (health-bar amber)** — wells at ≥50% calibrated "
+        "30-day failure probability that are NOT yet losing production (plus non-$ "
+        "data-quality flags) — a forward-looking watch list.\n"
+        "- **Optimization Board's 'At-Risk Watch'** — the ECONOMIC tier: a trigger "
+        "is present (deferring or elevated risk) but the lift-appropriate "
+        "intervention doesn't clear its cost yet (non-positive risked NPV) — "
+        "monitor and re-rank, don't spend capital.\n\n"
+        "A well can sit in any combination; none of the three is a subset of "
+        "another.")
 
     pt.section("NRI conventions — deck vs per-well")
     st.markdown(

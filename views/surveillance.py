@@ -79,7 +79,11 @@ def _fleet_map(fleet: dict, price: float) -> None:
         "global Well File selection). Well locations are SYNTHETIC — each well's real "
         "Permian county (from the fleet registry) placed at the county centroid with a "
         "deterministic within-county jitter. Colour is the live health tier (green "
-        "healthy / amber watch / red down).")
+        "healthy / amber watch / red down). Watch here = deferring production or "
+        "top-quartile failure risk — the HEALTH read; distinct from the "
+        "Optimization Board's economic At-Risk Watch (a losing well whose "
+        "intervention doesn't pay yet). One canonical mapping of the three 'watch' "
+        "meanings is on Methods & Limitations.")
 
 
 def _apply_map_selection(event) -> None:
@@ -116,7 +120,7 @@ def render() -> None:
 
     pt.masthead("ops", "Surveillance",
                 "Fleet production surveillance — oil, water and gas rate-time, the "
-                "decline/type-curve check, and a lift-aware per-well drill-down.")
+                "fleet decline check, and a lift-aware per-well drill-down.")
     token = c.scada_token()
     fleet = c.fleet_for_token(token)
     pt.context_bar([
@@ -124,6 +128,19 @@ def render() -> None:
         ("As of", c.fleet_as_of(fleet)),
         ("Deck", c.deck_label()),
     ])
+    c.page_purpose(
+        "**The question this page answers: is the fleet producing what it "
+        "should, and which wells are not?**\n\n"
+        "- **When:** second stop of the 6:30am loop, right after Home — confirm "
+        "the fleet trend, then drill into the wells Home flagged.\n"
+        "- **Headline read:** *Actual vs expected decline* (%) — trailing-7-day "
+        "fleet oil against the fleet's own fitted exponential decline (a trend "
+        "check, not an offset-well type curve); below −1% means downtime/"
+        "underperformance is deferring barrels (*Implied deferment*, BOPD).\n"
+        "- **Map:** green / amber / red = live health tier; click a well to load "
+        "it in the drill-down below (also sets the console-wide selection).\n"
+        "- **Next:** from the drill-down, open **Well 360** for the full well "
+        "review or the **Action Chain** to price and authorize the fix.")
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
 
@@ -135,9 +152,9 @@ def render() -> None:
 
 
 def _live_body(fleet: dict, price: float) -> None:
-    """Spotfire-style live surveillance — fleet rate-time, type-curve check, fleet
-    map, and the lift-aware per-well drill-down. The original Surveillance body,
-    now the first tab alongside the deep Early-Warning detector."""
+    """Spotfire-style live surveillance — fleet rate-time, fleet decline check, fleet
+    map, and the lift-aware per-well drill-down. The original Surveillance body, now
+    the first tab alongside the deep Early-Warning detector."""
     all_ids = [str(w) for w in fleet]
     with st.expander("Filters — CTB · lift type · basin · county", expanded=False):
         keep = c.fleet_filter_controls("surv", all_ids)
@@ -190,9 +207,12 @@ def _live_body(fleet: dict, price: float) -> None:
         "Fleet daily totals: oil = Σ bopd, water = Σ (bfpd − bopd), gas = Σ gas_mcfd "
         "across producing wells. Dashed line is the trailing 30-day moving average.")
 
-    pt.section("On the Type Curve?",
+    pt.section("On Trend? — Fleet Decline Check",
                "Fleet oil against its own exponential-decline fit — are we holding "
-               "the expected decline, or losing barrels to downtime / underperformance?")
+               "the expected decline, or losing barrels to downtime / "
+               "underperformance? The curve here is the fleet's own fitted "
+               "exponential decline on its first 80% of history — a self-referential "
+               "trend check, not an offset-well type curve.")
     _typecurve_chart(ff)
 
     st.divider()
@@ -213,8 +233,10 @@ def _live_body(fleet: dict, price: float) -> None:
         # active filters excluded the previously-picked well — keep the widget valid
         st.session_state["surv_well"] = ids[0]
     wsel = st.selectbox("Well", ids, key="surv_well", on_change=_sync_surv_well,
+                        format_func=c.well_label,
                         help="Also sets the globally-selected well for Well 360 / "
-                             "Action Chain.")
+                             "Action Chain. The id is portable to Engineering "
+                             "Workbench and Capital Desk.")
     meta = fleet_registry.get(wsel)
     st.markdown(
         pt.pill(f"{meta.lift} lift", "info") + " " +
@@ -223,6 +245,13 @@ def _live_body(fleet: dict, price: float) -> None:
         pt.pill(f"{meta.lateral_length_ft:,} ft lateral", "muted"),
         unsafe_allow_html=True)
     _well_charts(fleet.get(wsel), meta, win)
+
+    # Warm ending for the drill-down — the round-1 audit found it ended cold
+    # (Well 360 has a next-step pointer; this drill-down didn't).
+    c.next_step("Well 360", "→ Full well review (Well 360)",
+                icon=":material/oil_barrel:")
+    c.next_step("Action Chain", "→ Detect → predict → authorize (Action Chain)",
+                icon=":material/account_tree:")
 
     theme.references(["arps", "deferment"])
 
@@ -282,7 +311,8 @@ def _typecurve_chart(ff: pd.DataFrame) -> None:
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ff["date"], y=oil, name="Actual fleet oil",
                              line=dict(color=theme.GREEN, width=1.6)))
-    fig.add_trace(go.Scatter(x=ff["date"], y=expected, name="Expected decline (type curve)",
+    fig.add_trace(go.Scatter(x=ff["date"], y=expected,
+                             name="Expected decline (fleet's own fit)",
                              line=dict(color=theme.RED, width=1.4, dash="dash")))
     fig.update_layout(xaxis_title="", yaxis_title="Fleet oil (BOPD)")
     st.plotly_chart(theme.style_fig(fig, height=340), width="stretch")
@@ -296,10 +326,12 @@ def _typecurve_chart(ff: pd.DataFrame) -> None:
     cols[0].metric("Annual decline (fit)", f"{eff_annual_decline:,.0f}%",
                    help="Effective annual decline from the exponential fit "
                         "(1 − exp(Di·365), Di in 1/day).")
-    cols[1].metric("Actual vs type curve", f"{var_pct:+.1f}%",
+    cols[1].metric("Actual vs expected decline", f"{var_pct:+.1f}%",
                    delta="below curve" if var_pct < -1 else "on/above curve",
                    delta_color="inverse" if var_pct < -1 else "off",
-                   help="Trailing-7-day fleet oil vs the extrapolated decline.")
+                   help="Trailing-7-day fleet oil vs the extrapolated decline — "
+                        "the fleet's own fitted trend (fit on the first 80% of "
+                        "history), not an offset-well type curve.")
     cols[2].metric("Implied deferment", f"{max(recent_exp - recent_act, 0):,.0f} BOPD",
                    help="How far below the expected decline the fleet is producing "
                         "(barrels the Loss Accounting book quantifies by cause).")
@@ -357,8 +389,10 @@ def _well_charts(df, meta, win: int) -> None:
                         "pound-off.",
             "Flowing": "Flowing wells: no downhole pump — the oil/water/gas streams "
                        "and downhole pressure carry the review."}.get(meta.lift, "")
-    if note:
-        theme.source_note(note)
+    decline_note = ("Dashed 'Expected decline' on the oil panel = this well's own "
+                    "fitted exponential decline (fit on its full history) — a "
+                    "self-referential trend check, not an offset-well type curve.")
+    theme.source_note((note + " " if note else "") + decline_note)
 
 
 # ---- Early Warning · deep anomaly detection (optional torch) ------------------

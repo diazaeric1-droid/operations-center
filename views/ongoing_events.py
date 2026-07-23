@@ -36,6 +36,21 @@ def render() -> None:
         ("Deck", c.deck_label()),
         ("Replay", f"trailing {_replay_days()} as-of days, in-memory store"),
     ])
+    c.page_purpose(
+        "**The question this page answers: which outages are STILL open, how "
+        "long have they run, and what have they cost so far?**\n\n"
+        "- **When:** in the 6:30am loop when a problem isn't new — the morning "
+        "scan is a point-in-time snapshot; this page adds memory (NEW → ONGOING "
+        "→ RESOLVED lifecycle with running duration).\n"
+        "- **Headline read:** *Cumulative Deferred (open)* ($) — deferred "
+        "dollars accrued over each open event's WHOLE life at the deck oil "
+        "price, not just today's loss.\n"
+        "- **Note:** the demo-outage toggle below injects a synthetic multi-day "
+        "event on THIS page only, so its counts can read one higher than Home / "
+        "the Morning Brief / the Optimization Board.\n"
+        "- **Next:** select a row to confirm the well on **Surveillance**; "
+        "long-runners feed the **Recovery Work Queue** sizing on the monthly "
+        "book.")
 
     import core
     inject = False
@@ -52,7 +67,11 @@ def render() -> None:
             st.caption(f"Demo outage active on **{core.DEMO_OUTAGE_WELL}** — a "
                        f"sustained ~{1 - core.DEMO_OUTAGE_FRACTION:.0%} rate loss held "
                        f"over the last {core.DEMO_OUTAGE_LEN} days (no recovery), so "
-                       "it reads ONGOING with a growing cumulative deferral.")
+                       "it reads ONGOING with a growing cumulative deferral. "
+                       "The injected outage appears ONLY on this page — Home, the "
+                       "Morning Brief, and the Optimization Board replay the "
+                       "committed fleet without it, so their event counts run one "
+                       "lower.")
     else:
         st.caption("Replaying your uploaded fleet's history — any multi-day outage "
                    "in your data surfaces here as an ONGOING event.")
@@ -64,14 +83,24 @@ def render() -> None:
     resolved = [e for e in events if e.state == RESOLVED]
     multi_day = [e for e in open_evts if e.duration_days > 1]
 
+    if is_upload:
+        _demo_note = "Replayed from your uploaded fleet (no demo injection)."
+    elif inject:
+        _demo_note = ("Includes the injected demo outage (toggle above) — Home "
+                      "and the Morning Brief replay without it.")
+    else:
+        _demo_note = ("The demo outage is OFF — this count matches the committed "
+                      "fleet Home and the Morning Brief replay.")
     pt.kpi_row([
-        {"label": "Open Events (NEW/ONGOING)", "value": f"{len(open_evts)}"},
+        {"label": "Open Events (NEW/ONGOING)", "value": f"{len(open_evts)}",
+         "help": f"Events currently NEW or ONGOING on the replay. {_demo_note}"},
         {"label": "Multi-Day ONGOING", "value": f"{len(multi_day)}",
          "help": "Open events past their first day — the lifecycle a point-in-time "
                  "scan can't keep visible."},
         {"label": "Cumulative Deferred (open)",
          "value": f"${sum(e.deferred_usd for e in open_evts):,.0f}",
-         "help": "Sum of cumulative deferred $ across open events over their life."},
+         "help": "Sum of cumulative deferred $ across open events over their "
+                 f"life. {_demo_note}"},
     ])
 
     pt.section("Open Events",
@@ -80,7 +109,8 @@ def render() -> None:
     if open_evts:
         rows = []
         # Longest-running first; ties broken by cumulative deferred $.
-        for e in sorted(open_evts, key=lambda e: (-e.duration_days, -e.deferred_usd)):
+        ordered = sorted(open_evts, key=lambda e: (-e.duration_days, -e.deferred_usd))
+        for e in ordered:
             rows.append({
                 "Duration (days)": e.duration_days,
                 "Well": e.well_id,
@@ -93,14 +123,19 @@ def render() -> None:
                 "Ack": "suppressed" if e.acknowledged else "",
             })
         ev_df = pd.DataFrame(rows)
-        st.dataframe(
+        # Source frame for the row-jump: same row order, raw well ids (the display
+        # frame stays purely presentational) — the same pattern morning_brief uses.
+        src_df = pd.DataFrame({"well_id": [str(e.well_id) for e in ordered]})
+        ev = st.dataframe(
             ev_df, width="stretch", hide_index=True,
+            on_select="rerun", selection_mode="single-row", key="oe_open_sel",
             column_config={
                 "Cumulative Deferred $": st.column_config.NumberColumn(format="$%d"),
                 "Cumulative Deferred bbl": st.column_config.NumberColumn(format="%d"),
                 "Today's Deferral $": st.column_config.NumberColumn(format="$%d"),
                 "Duration (days)": st.column_config.NumberColumn(format="%d d"),
             })
+        c.handle_row_jump(ev, src_df, "_oe_jump")
         st.download_button("Download open events (CSV)",
                            data=ev_df.to_csv(index=False),
                            file_name="ops_open_events.csv", mime="text/csv")
@@ -122,7 +157,7 @@ def render() -> None:
         "a confirmed drop stays ONGOING while production holds below its pre-event "
         "baseline (accruing cumulative deferred bbl/$ at the deck oil price) and "
         "RESOLVES on recovery into band — the same lifecycle the morning brief "
-        "reports.")
+        "reports. Select a row to open the well on Surveillance.")
     _backtest_caption()
     theme.references(["arps", "deferment"])
 

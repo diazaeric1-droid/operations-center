@@ -43,7 +43,8 @@ def render() -> None:
     meta = fleet_registry.get(well_id)
     pt.masthead("ops", "Action Chain",
                 f"{well_id} · {meta.name} — one well through the whole machine: "
-                "digest alert → ESP diagnosis → decision-ready AFE.")
+                f"digest alert → {'ESP' if meta.lift == 'ESP' else 'failure-risk'} "
+                "diagnosis → decision-ready AFE.")
 
     import core
 
@@ -56,8 +57,10 @@ def render() -> None:
         if st.session_state.get("ac_pick") != well_id and well_id in ids:
             st.session_state["ac_pick"] = well_id
         st.selectbox("Build an AFE for well", ids, key="ac_pick", on_change=_sync_ac,
+                     format_func=c.well_label,
                      help="Any well in the fleet — the chain runs end to end and "
-                          "produces a decision-ready AFE.")
+                          "produces a decision-ready AFE. The id is portable to "
+                          "Engineering Workbench and Capital Desk.")
     with dd[1]:
         opts = ["—"] + flagged_ids
         st.selectbox(f"Jump to a flagged well ({len(flagged_ids)} today)", opts,
@@ -70,6 +73,22 @@ def render() -> None:
         ("Working interest", "1.00 (operator case)"),
         ("Chain", "deterministic · no API key"),
     ])
+    c.page_purpose(
+        "**The question this page answers: for THIS well, what did we detect, "
+        "what will fail, and should we spend the money — with the paperwork to "
+        "prove it?**\n\n"
+        "- **When:** the last stop of the 6:30am loop — after the Optimization "
+        "Board (or Well 360) names the well, this runs the whole machine: "
+        "detect → predict → authorize.\n"
+        "- **Headline read:** the *Economic verdict* banner — AUTHORIZE (risked "
+        "NPV > 0), MONITOR (doesn't clear cost yet), DIAGNOSE FIRST (ambiguous "
+        "failure mode), or NO ACTION. Risked NPV = 30-day failure signal × "
+        "PV(net revenue protected) − intervention cost.\n"
+        "- **Artifacts:** every stage emits a downloadable artifact (WellAlert "
+        "JSON → WellDiagnosis JSON → the AFE document) — the defensible paper "
+        "trail.\n"
+        "- **Next:** the AFE's life continues in **Capital Desk → Draft AFE** "
+        "(routing, approval, variance) — same well id, separate deployment.")
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
 
@@ -152,9 +171,16 @@ def render() -> None:
     st.divider()
 
     # ---- Stage 2 · Predict -----------------------------------------------------
-    pt.section("2 · Predict — ESP Failure-Risk Agent",
-               "The stage-2 artifact: an AFE-ready WellDiagnosis (risk score + "
-               "failure mode + priced intervention).")
+    # Scope the agent name by lift type (Well 360's existing fix, mirrored): the
+    # risk model is generic (trained on this fleet's labeled faults), and calling
+    # it the "ESP" agent on a gas-lift / rod-pump / flowing well contradicts the
+    # adaptive metric help inside this very section for ~2/3 of the fleet.
+    scorer = ("ESP Failure-Risk Agent" if meta.lift == "ESP"
+              else "Failure-Risk Agent")
+    pt.section(f"2 · Predict — {scorer}",
+               f"The stage-2 artifact: an AFE-ready WellDiagnosis from the "
+               f"{scorer.lower()} (risk score + failure mode + priced "
+               "intervention).")
     mode_full = str(diag["suspected_mode"]).strip()
     mode_short = mode_full.split("—")[0].strip() or "—"
     m1, m2, m3 = st.columns(3)
@@ -211,9 +237,15 @@ def render() -> None:
                    "today (risked NPV is non-positive).")
     afe_md = core.render_afe(diag, working_interest=1.0, net_revenue_interest=nri,
                              realized_price=price)
-    st.download_button("⬇ Download decision-ready AFE (markdown)", data=afe_md,
+    st.download_button("Download decision-ready AFE (Markdown)", data=afe_md,
                        file_name=f"AFE_{well_id}_{diag['intervention']}.md",
                        mime="text/markdown", type="primary")
+    st.caption("This AFE's life continues in **Capital Desk → Authorize › Draft "
+               "AFE** (capital-desk.streamlit.app): enter this well id there and "
+               "its production history auto-loads from the suite-shared fleet; "
+               "then route it on the Pipeline Board and reconcile actuals on "
+               "Variance. Well ids are shared across the suite — page state does "
+               "not carry.")
     with st.expander("Full AFE document", expanded=npv > 0):
         st.markdown(afe_md)
     st.caption("The AFE's **Net NPV** is deterministic (not risk-weighted); the "
@@ -242,11 +274,24 @@ def render() -> None:
         st.caption("Monte-Carlo economics need a priced intervention — not available "
                    "for this well's recommendation.")
     else:
+        # SPE exceedance convention (suite-wide): P10 = high case, P90 = low case.
+        # DISPLAY relabel only — mc['p10'] is still the 10th percentile of the NPV
+        # distribution (the downside), now labeled P90; mc['p90'] (the 90th
+        # percentile, upside) is labeled P10. No math changes.
         mcs = st.columns(4)
-        mcs[0].metric("P10 (downside)", f"${mc['p10']:,.0f}")
-        mcs[1].metric("P50 (median)", f"${mc['p50']:,.0f}")
-        mcs[2].metric("P90 (upside)", f"${mc['p90']:,.0f}")
-        mcs[3].metric("P(payout < 24 mo)", f"{mc['prob_payout']:.0%}")
+        mcs[0].metric("P10 (upside)", f"${mc['p90']:,.0f}",
+                      help="Exceedance convention — P10 is the HIGH case: a 10% "
+                           "chance the NPV exceeds this (the 90th percentile of "
+                           "the trial distribution).")
+        mcs[1].metric("P50 (median)", f"${mc['p50']:,.0f}",
+                      help="Half the trials land above this, half below.")
+        mcs[2].metric("P90 (downside)", f"${mc['p10']:,.0f}",
+                      help="Exceedance convention — P90 is the LOW case: a 90% "
+                           "chance the NPV exceeds this (the 10th percentile of "
+                           "the trial distribution).")
+        mcs[3].metric("P(payout < 24 mo)", f"{mc['prob_payout']:.0%}",
+                      help="Share of trials in which the job pays back its cost "
+                           "within 24 months.")
         _tornado_chart(mc)
         theme.source_note(
             f"{mc['n_trials']:,} trials, net-to-operator at the deck price/NRI (PV10), "
@@ -255,7 +300,8 @@ def render() -> None:
             "(mean of the inputs) reconciles with the AFE's deterministic Net NPV above "
             "by construction; the P50 sits slightly below it because the NPV distribution "
             "is right-skewed. The tornado shows each variable's NPV swing when moved to "
-            "its P10/P90 with the others held at base — where the risk to this AFE lives.")
+            "its downside/upside (P90/P10, exceedance convention) with the others held "
+            "at base — where the risk to this AFE lives.")
 
     theme.source_note(
         "Engineering math is deterministic at every hop; economics use the deck oil "
@@ -284,7 +330,8 @@ def _tornado_chart(mc: dict) -> None:
             y=[_TORNADO_LABELS.get(name, name)], x=[hi - lo], base=lo,
             orientation="h", marker_color=theme.BLUE,
             hovertemplate=f"{_TORNADO_LABELS.get(name, name)}<br>"
-                          f"P10 NPV: ${lo:,.0f}<br>P90 NPV: ${hi:,.0f}"
+                          f"P90 NPV (downside): ${lo:,.0f}<br>"
+                          f"P10 NPV (upside): ${hi:,.0f}"
                           f"<br>swing: ${t['swing']:,.0f}<extra></extra>",
             showlegend=False))
     fig.add_vline(x=base, line_color=theme.NAVY, line_dash="dash", line_width=1.2)

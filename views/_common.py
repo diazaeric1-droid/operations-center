@@ -81,8 +81,62 @@ def deck() -> tuple[float, float, float]:
 
 
 def deck_label() -> str:
+    """Context-bar deck cell — the portfolio-standard format string (identical in
+    Operations Center, Engineering Workbench, and Capital Desk)."""
     price, nri, disc = deck()
-    return f"${price:,.2f}/bbl · NRI {nri:.2f} · {disc:.0%} disc."
+    return f"${price:.0f}/bbl · NRI {nri:.0%} · {disc:.1%} disc"
+
+
+def page_purpose(body_md: str) -> None:
+    """Top-of-page "ℹ️ What is this page for?" affordance — PE feedback round 1:
+    "tell me WHAT A PAGE IS FOR". Every view calls this once, right under the
+    masthead/context bar, with plain-PE language: the question the page answers,
+    where in the 6:30am loop to open it, how to read the headline output, and the
+    next page in the spine. Kept product-local (views/_common) — product_theme.py
+    is a vendored presentation layer shared with the sibling products and must
+    not drift from here."""
+    with st.popover("ℹ️ What is this page for?"):
+        st.markdown(body_md)
+
+
+def well_label(wid) -> str:
+    """Human-readable well display label — 'well_013 · Cline 13H (Gas lift)'.
+    Pass as ``format_func=`` only: selectbox VALUES stay raw ids so every
+    session-state / jump wire is untouched. Defensive: unknown ids (e.g. a BYOD
+    fleet outside the registry) fall back to the raw id."""
+    try:
+        m = fleet_registry.get(str(wid))
+        return f"{wid} · {m.name} ({m.lift})"
+    except Exception:  # noqa: BLE001
+        return str(wid)
+
+
+def next_step(page_title: str, label: str, icon: str | None = None) -> None:
+    """One in-product next-step pointer: st.page_link to a registered page, with
+    the portfolio label format '→ <verb phrase> (<Page Name>)'. Degrades to a
+    caption when the page registry is absent or page_link is unavailable (the
+    per-view AppTest harness renders outside a navigation context)."""
+    import views
+    page = views.PAGE_OBJECTS.get(page_title)
+    if page is not None:
+        try:
+            if icon is not None:
+                st.page_link(page, label=label, icon=icon)
+            else:
+                st.page_link(page, label=label)
+            return
+        except Exception:  # noqa: BLE001 — outside a navigation context
+            pass
+    st.caption(f"{label} — open **{page_title}** in the sidebar.")
+
+
+# Canonical NRI help string (portfolio convention; one verbatim copy per product).
+NRI_HELP = (
+    "NRI = net revenue interest — your share of revenue after royalty burdens. "
+    "The sidebar value drives chain/AFE economics (the Optimization Board ranking, "
+    "the Action Chain AFE, and every risked-NPV figure); per-well NRI edited on "
+    "Sources & BYOD overrides it on the roll-up pages' NET views (Morning Brief, "
+    "Optimization Board deferred-$ columns, Deferment Overview).")
 
 
 # ---- SCADA fleet (Today + Well File pages) -----------------------------------
@@ -563,7 +617,7 @@ def unified_brief_frame(events, anomalies, nri_by_well: dict,
                         net_view: bool, price: float) -> pd.DataFrame:
     """ONE ranked list for the Morning Brief: state-machine events (NEW / ONGOING /
     RESOLVED) plus active scan anomalies on wells with no open event, ordered by
-    today's BO/day impact (net of per-well NRI when ``net_view``), status as the
+    today's BOPD impact (net of per-well NRI when ``net_view``), status as the
     tiebreaker. When a well has both an open event and a scan anomaly, the EVENT's
     deferral is used (the two windows differ slightly). Pure / streamlit-free."""
     rows: list[dict] = []

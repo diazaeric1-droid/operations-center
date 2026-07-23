@@ -343,3 +343,218 @@ def _fn_source(rel: str, fn: str) -> str:
     node = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == fn)
     return textwrap.dedent(ast.get_source_segment((ROOT / rel).read_text(), node))
+
+
+# =================================================================================
+# UX / guidance round 2 (v0.9.0): page-purpose affordance, next-step pointers,
+# exceedance convention, loss-book disambiguation, typed deck inputs, terminology.
+# =================================================================================
+
+import pytest  # noqa: E402
+
+ALL_TITLES = ["Home", "Surveillance", "Morning Brief", "Optimization Board",
+              "Ongoing Events", "Deferment Overview", "Causes & Pareto",
+              "Recovery Work Queue", "Well 360", "Action Chain",
+              "Sources & BYOD", "Methods & Limitations"]
+
+# Every page_purpose body leads with this phrase — the AppTest render check keys
+# on it (the popover's markdown body lands in the element tree).
+PURPOSE_MARKER = "The question this page answers"
+
+
+def _view_sources() -> dict:
+    """{page title: source Path} straight from the navigation spec, so a page
+    added to PAGES without the convention fails these tests automatically."""
+    import views
+    out = {}
+    for specs in views.PAGES.values():
+        for (title, _icon, _slug, render, _default) in specs:
+            out[title] = Path(sys.modules[render.__module__].__file__)
+    return out
+
+
+def test_every_view_calls_page_purpose_exactly_once():
+    """The CD-ported convention: ONE 'ℹ️ What is this page for?' popover per view,
+    placed by a single helper call (source pin — a dropped or doubled call on any
+    registered page fails loudly)."""
+    for title, path in _view_sources().items():
+        src = path.read_text()
+        n = src.count("c.page_purpose(")
+        assert n == 1, f"{title}: expected exactly 1 page_purpose call, found {n}"
+
+
+@pytest.mark.parametrize("title", ALL_TITLES)
+def test_each_view_renders_exactly_one_purpose_popover(title, bootstrapped,
+                                                       monkeypatch):
+    """Render check: the popover BODY (its lead phrase) reaches the element tree
+    exactly once on every registered page."""
+    at = _run_view(title, monkeypatch, {})
+    hits = [m for m in at.markdown if PURPOSE_MARKER in str(m.value)]
+    assert len(hits) == 1, (f"{title}: expected exactly 1 rendered page-purpose "
+                            f"body, found {len(hits)}")
+
+
+def test_page_purpose_helper_is_product_local_popover():
+    src = _fn_source("views/_common.py", "page_purpose")
+    assert 'st.popover("ℹ️ What is this page for?")' in src
+    # NOT in the vendored chrome (product_theme must not drift across products).
+    assert "page_purpose" not in (ROOT / "product_theme.py").read_text()
+
+
+# ---- OC-WO-4: SPE exceedance convention -----------------------------------------
+
+def test_action_chain_monte_carlo_uses_the_exceedance_convention():
+    """Display relabel only: the 90th-percentile (upside) NPV is labeled P10, the
+    10th-percentile (downside) P90 — P10 ≥ P50 ≥ P90 for NPV, matching EW's
+    read-only vendored core. The old percentile-index labels must be gone."""
+    src = (ROOT / "views" / "action_chain.py").read_text()
+    assert "P10 (downside)" not in src and "P90 (upside)" not in src
+    # the mapping itself: the LARGER percentile output carries the P10 label
+    assert 'metric("P10 (upside)", f"${mc[\'p90\']:,.0f}"' in src
+    assert 'metric("P90 (downside)", f"${mc[\'p10\']:,.0f}"' in src
+
+
+def test_methods_carries_the_verbatim_exceedance_sentence():
+    from views import methods
+    assert methods.EXCEEDANCE_SENTENCE == (
+        "Suite convention: Pxx = probability of exceedance — P10 is the high "
+        "case, P90 the low case.")
+    assert "EXCEEDANCE_SENTENCE" in (ROOT / "views" / "methods.py").read_text()
+
+
+# ---- OC-WO-10: stage-2 agent name scoped by lift --------------------------------
+
+def test_action_chain_stage2_header_scopes_agent_name_by_lift(bootstrapped,
+                                                              monkeypatch):
+    """A gas-lift / rod-pump / flowing well's Action Chain must not title stage 2
+    'ESP Failure-Risk Agent' (Well 360 fixed this scoping in round 1; the chain
+    header now mirrors it)."""
+    non_esp = next(w for w in (f"well_{n:03d}" for n in range(1, 101))
+                   if fr.get(w).lift != "ESP")
+    at = _run_view("Action Chain", monkeypatch, {"well_id": non_esp})
+    md = " ".join(str(m.value) for m in at.markdown)
+    # Pin the SECTION TITLE (the page-owned string). The vendored AFE document
+    # (apps/afe-copilot, read-only) legitimately says 'Prepared By (auto — ESP
+    # Failure-Risk Agent)' inside the artifact, so the assertion targets the
+    # stage header, not every string on the page.
+    assert "2 · Predict — ESP Failure-Risk Agent" not in md, \
+        f"{non_esp} ({fr.get(non_esp).lift}) still titled the ESP agent"
+    assert "2 · Predict — Failure-Risk Agent" in md
+
+
+# ---- OC-WO-2: Recovery Work Queue — dead end + id collision ---------------------
+
+def test_recovery_queue_disambiguates_loss_book_wells_and_links_the_chain():
+    src = (ROOT / "views" / "recovery_queue.py").read_text()
+    assert "(loss book)" in src                       # display disambiguation
+    assert "NOT the surveillance wells that share the same id" in src
+    assert 'c.next_step("Action Chain"' in src        # the one-click handoff
+    # …but NEVER a well jump from this page — a loss-book id carried into the
+    # chain would BE the fake join the console's own invariant forbids.
+    assert "jump_to_well" not in src
+    assert "handle_row_jump" not in src
+    assert "_well_jump" not in src
+
+
+# ---- OC-WO-3: Home — clickable next steps ---------------------------------------
+
+def test_home_what_to_do_first_steps_are_clickable():
+    src = _fn_source("views/home.py", "_what_broke_and_next")
+    assert '.button("Go →"' in src
+    assert "c.jump_to_well(" in src
+    # jumps go through the sanctioned handoff — never a direct write to the
+    # widget-owned key from the page body (crashed OC in production).
+    assert 'st.session_state["well_id"]' not in src
+    assert "Counts differ by design" in (ROOT / "views" / "home.py").read_text()
+
+
+# ---- OC-WO-6 / OC-WO-7: board path to authorize, surveillance warm ending -------
+
+def test_board_has_visible_path_to_authorize_and_column_help():
+    src = (ROOT / "views" / "triage_board.py").read_text()
+    assert "Build the AFE for the selected well on the Action Chain" in src
+    assert "the Action Chain picks the same" in src   # …well up automatically
+    for col in ("Addressable BOPD", "NPV Basis", "Risk Rank"):
+        assert f'"{col}": st.column_config' in src, f"missing help on {col!r}"
+
+
+def test_surveillance_decline_check_retitle_and_drilldown_next_steps():
+    src = (ROOT / "views" / "surveillance.py").read_text()
+    assert "On Trend? — Fleet Decline Check" in src
+    assert "On the Type Curve?" not in src
+    assert "not an offset-well type curve" in src
+    assert 'c.next_step("Well 360"' in src
+    assert 'c.next_step("Action Chain"' in src
+    # the map's amber definition names the HEALTH read vs the board's economic watch
+    assert "distinct from the " in src and "At-Risk Watch" in src
+    # …and Methods carries the canonical three-tier mapping
+    assert "One word, three tiers" in (ROOT / "views" / "methods.py").read_text()
+
+
+# ---- OC-WO-8: row-jump parity + demo-injection disclosure -----------------------
+
+def test_ongoing_events_row_jump_and_demo_disclosure():
+    src = (ROOT / "views" / "ongoing_events.py").read_text()
+    assert 'on_select="rerun"' in src and 'selection_mode="single-row"' in src
+    assert 'c.handle_row_jump(ev, src_df, "_oe_jump")' in src
+    assert "appears ONLY on this page" in src
+    assert "Select a row to open the well on Surveillance" in src
+
+
+def test_brief_detailed_panels_have_row_jump_parity():
+    src = (ROOT / "views" / "morning_brief.py").read_text()
+    for sentinel in ("_mb_down_jump", "_mb_div_jump", "_mb_anom_jump"):
+        assert sentinel in src, f"detailed panels lost the {sentinel} row-jump"
+
+
+# ---- OC-WO-9: human-readable well labels ----------------------------------------
+
+def test_well_label_formats_and_preserves_raw_values():
+    from views import _common as c
+
+    m = fr.get("well_007")
+    assert c.well_label("well_007") == f"well_007 · {m.name} ({m.lift})"
+    # formatter is display-only: every picker passes it as format_func, values raw
+    for rel in ("app.py", "views/surveillance.py", "views/well_360.py",
+                "views/action_chain.py"):
+        assert "format_func=c.well_label" in (ROOT / rel).read_text(), rel
+
+
+# ---- OC-WO-11: sidebar convergence ----------------------------------------------
+
+def test_sidebar_deck_is_typed_inputs_with_portfolio_labels():
+    src = (ROOT / "app.py").read_text()
+    assert "st.slider" not in src                      # exact typed inputs (round-1 ask)
+    assert 'st.number_input("Oil price ($/bbl)"' in src
+    assert 'st.number_input("NRI (net revenue interest)"' in src
+    assert "help=c.NRI_HELP" in src
+    assert "DF(m) = (1+r)^(m/12)" in src
+    assert "Capital Desk additionally nets severance + ad valorem taxes" in src
+    assert 'st.selectbox("Well", _well_ids, key="well_id"' in src
+
+
+# ---- OC-WO-12: terminology / units / export labels ------------------------------
+
+def test_display_terminology_and_export_labels_are_aligned():
+    for p in sorted((ROOT / "views").glob("*.py")) + [ROOT / "app.py"]:
+        src = p.read_text()
+        assert "BO/day" not in src, f"'BO/day' unit token survives in {p.name}"
+        assert "⬇" not in src, f"glyph in a download label in {p.name}"
+        assert "(markdown)" not in src, f"lowercase format token in {p.name}"
+    mb = (ROOT / "views" / "morning_brief.py").read_text()
+    assert "Deferred at Risk" not in mb               # unified money label
+    assert "Deferred $/day (net)" in mb
+    # portfolio deck cell format string
+    assert '"${price:.0f}/bbl · NRI {nri:.0%} · {disc:.1%} disc"' \
+        in (ROOT / "views" / "_common.py").read_text()
+
+
+# ---- OC-WO-5: cross-product pointers are honest captions ------------------------
+
+def test_cross_product_pointers_name_product_page_and_url():
+    ac = (ROOT / "views" / "action_chain.py").read_text()
+    assert "capital-desk.streamlit.app" in ac
+    assert "Draft AFE" in ac
+    w3 = (ROOT / "views" / "well_360.py").read_text()
+    assert "engineering-workbench.streamlit.app" in w3
+    assert "same well id" in w3

@@ -30,6 +30,22 @@ def render() -> None:
         ("Cadence", "monthly (real public records)" if is_real
          else "daily (modeled fleet)"),
     ])
+    c.page_purpose(
+        "**The question this page answers: where are the barrels going — how far "
+        "below potential is the fleet producing, and is it downtime or "
+        "underperformance?**\n\n"
+        "- **When:** the loss-accounting leg of the morning loop — after the "
+        "live triage (Home → Board), this is the monthly book that quantifies "
+        "the bleed.\n"
+        "- **Headline read:** *Production Efficiency* (%) = actual ÷ potential "
+        "over the period; *Deferred* (bbl or $) is the gap. 'Potential' is "
+        "estimated from each well's own full-uptime months (P75, "
+        "decline-aware).\n"
+        "- **Careful:** this page runs on its OWN dataset — the monthly "
+        "loss-accounting book — not the daily SCADA fleet the Today/Well File "
+        "pages use; no join is faked between them.\n"
+        "- **Next:** **Causes & Pareto** attributes the barrels to causes; the "
+        "**Recovery Work Queue** turns the recoverable ones into ranked jobs.")
     theme.data_badge(*c.loss_badge(source))
     st.caption("This page runs on its **own** dataset — the monthly loss-accounting "
                "book — not the daily SCADA fleet the Today/Well File pages use. "

@@ -39,6 +39,21 @@ def render() -> None:
         ("Loss accounting", c.loss_context(st.session_state["data_source"])),
         ("Deck", c.deck_label()),
     ])
+    c.page_purpose(
+        "**The question this page answers: what is every number computed from — "
+        "and how do I run the console on MY data?**\n\n"
+        "- **When:** outside the 6:30am loop — come here to check provenance, "
+        "upload your own fleet (daily SCADA CSV) or monthly production book, or "
+        "edit per-well NRI (NRI = net revenue interest, your share of revenue "
+        "after royalty burdens).\n"
+        "- **Headline read:** the two-dataset table — the daily surveillance "
+        "fleet and the monthly loss-accounting book are DIFFERENT datasets at "
+        "different cadences; the console never fakes a join between them.\n"
+        "- **Uploads are session-only:** parsed in memory, never written to "
+        "disk or logged.\n"
+        "- **Next:** **Methods & Limitations** documents how each number is "
+        "computed and where the synthetic demo stops standing in for a real "
+        "asset.")
 
     pt.section("Two Datasets, No Fake Join")
     n_scada = len(c.scada_well_ids())  # rendered from the bootstrapped fleet, never stale

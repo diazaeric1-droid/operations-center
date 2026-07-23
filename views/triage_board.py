@@ -30,6 +30,22 @@ def render() -> None:
         ("Deck", c.deck_label()),
         ("Ranking", "risked NPV = risk × PV(net revenue) − intervention cost"),
     ])
+    c.page_purpose(
+        "**The question this page answers: which economic interventions do I "
+        "authorize first, ranked by risked NPV?**\n\n"
+        "- **When:** fourth stop of the 6:30am loop — after the Brief tells you "
+        "what's wrong, this ranks what's worth capital.\n"
+        "- **Headline read:** *Addressable Risked NPV* ($) — Σ of positive "
+        "risk-weighted NPV (risked NPV = 30-day failure signal × PV of the net "
+        "revenue the intervention protects − intervention cost; the cost is "
+        "certain, so only the upside is chance-weighted). Four tiers: Restore "
+        "(down — fix first), Opportunities (act now), Watch (signal present, "
+        "doesn't pay yet), Stable (nothing to do).\n"
+        "- **Selecting a row** opens the well on **Surveillance** to confirm the "
+        "signal — the confirm-before-authorize discipline; the **Action Chain** "
+        "then picks the same well up automatically (the selection is "
+        "console-wide).\n"
+        "- **Next:** build the AFE on the **Action Chain**.")
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
 
@@ -185,8 +201,28 @@ def render() -> None:
         ev_i = st.dataframe(
             _intervention_table(opportunities, ev_days, nmap, net_view, price),
             width="stretch", hide_index=True,
-            on_select="rerun", selection_mode="single-row", key="ob_interv_sel")
+            on_select="rerun", selection_mode="single-row", key="ob_interv_sel",
+            column_config={
+                "Addressable BOPD": st.column_config.TextColumn(
+                    help="Incremental oil the intervention is modeled to protect "
+                         "or add."),
+                "NPV Basis": st.column_config.TextColumn(
+                    help="Full chain economics vs transparent proxy — flags wells "
+                         "where the certified chain economics weren't reachable."),
+                "Downtime Context": st.column_config.TextColumn(
+                    help="Open state-machine event on this well — verify the "
+                         "post-restart rate before acting."),
+                "30-Day Risk": st.column_config.TextColumn(
+                    help="Platt-calibrated 30-day failure probability from the "
+                         "failure-risk model (model card on Methods & "
+                         "Limitations)."),
+            })
         c.handle_row_jump(ev_i, opportunities, "_ob_interv_jump")
+        c.next_step("Action Chain",
+                    "→ Build the AFE for the selected well on the Action Chain")
+        st.caption("Selecting a row sets the console-wide well — Surveillance "
+                   "opens to confirm the signal; the Action Chain picks the same "
+                   "well up automatically.")
         theme.source_note(
             "Intervention + cost come from the AFE component's cost database; "
             "'NPV Basis' flags wells where the full chain economics weren't reachable "
@@ -221,7 +257,20 @@ def render() -> None:
         })
         ev_w = st.dataframe(wt, width="stretch", hide_index=True,
                             on_select="rerun", selection_mode="single-row",
-                            key="ob_watch_sel")
+                            key="ob_watch_sel",
+                            column_config={
+                                "Risk Rank": st.column_config.NumberColumn(
+                                    help="Rank within this watch list by 30-day "
+                                         "signal (1 = highest risk)."),
+                                "Indicated If It Fails": st.column_config.TextColumn(
+                                    help="The intervention that would run if the "
+                                         "well deteriorates — NOT a recommendation "
+                                         "to act today."),
+                                "Risked NPV (now)": st.column_config.TextColumn(
+                                    help="Risk × PV(net revenue) − cost at TODAY's "
+                                         "signal — negative here, which is why "
+                                         "this well is watch, not authorize."),
+                            })
         c.handle_row_jump(ev_w, w, "_ob_watch_jump")
         st.caption("'30-Day Risk Signal' is a Platt-calibrated probability from the "
                    "ESP model trained on this fleet's labeled faults (calibrated "
@@ -249,7 +298,15 @@ def render() -> None:
             s_lbl: s_usd.map(lambda x: f"${x:,.0f}"),
             "Status": "stable — no action",
         })
-        st.dataframe(sd, width="stretch", hide_index=True, height=360)
+        st.dataframe(sd, width="stretch", hide_index=True, height=360,
+                     column_config={
+                         "Lateral (ft)": st.column_config.TextColumn(
+                             help="Completion lateral length — context for peer "
+                                  "comparison, not a ranking input."),
+                         "Status": st.column_config.TextColumn(
+                             help="No trigger to act today — see the caption below "
+                                  "for the exact gate."),
+                     })
         st.caption("No trigger to act: not deferring production, below the fleet's "
                    "top-quartile risk cut, AND below the "
                    f"{int(core.ELEVATED_RISK_ABS_30D * 100)}% calibrated-risk floor. This "

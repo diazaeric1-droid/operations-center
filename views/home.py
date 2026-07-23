@@ -37,6 +37,22 @@ def render() -> None:
         ("Deck", c.deck_label()),
         ("Loss accounting", c.loss_context(st.session_state["data_source"])),
     ])
+    c.page_purpose(
+        "**The question this page answers: what broke overnight, what is it "
+        "costing, and what do I do first?**\n\n"
+        "- **When:** open it FIRST, at 6:30am — it is the landing page of the "
+        "morning loop (Home → Surveillance → Morning Brief → Optimization Board "
+        "→ Action Chain).\n"
+        "- **Headline read:** *Deferred $/day (net)* is today's live leak in "
+        "dollars (deferred barrels × deck oil price × NRI — net-to-operator); "
+        "*Top Opportunity* is the single largest value-accretive intervention "
+        "(risked NPV, $).\n"
+        "- **Counts lens:** the page shows the same fleet through three lenses — "
+        "*Open Alerts* counts anomalies (a well can raise several), *What Broke "
+        "Overnight* counts state-machine events per well, and the health bar "
+        "counts wells by tier. They differ by design; none is 'wrong'.\n"
+        "- **Next:** follow a *Go →* button, or start the loop on "
+        "**Surveillance**.")
 
     top_label, top_value = "none today", "—"
     if not opportunities.empty:
@@ -57,6 +73,10 @@ def render() -> None:
                  "(positive risk-weighted NPV). 'none today' means no intervention "
                  "currently clears its cost — the fleet is being held, not worked."},
     ])
+    st.caption(
+        "Counts differ by design: **Open Alerts** counts anomalies (a well can "
+        "raise several), **What Broke** counts state-machine events per well, and "
+        "the health bar counts wells by tier — the same fleet through three lenses.")
 
     import core
     if core.risk_scoring_degraded():
@@ -134,35 +154,62 @@ def _what_broke_and_next(anomalies, fleet, opportunities, price, nri, events) ->
                        + ", ".join(d["well_id"] for d in div["down"][:6]))
     with right:
         pt.section("What To Do First")
-        steps = []
+        # Each step: (markdown, jump page title | None, well_id | None). The app
+        # already knows the well AND the destination — so every well-carrying step
+        # gets a one-click "Go →" that parks the well in the _well_jump handoff
+        # (consumed at app.py top-of-run) and switches page; never a bare bold
+        # page name the user has to hunt for in the nav.
+        steps: list[tuple[str, str | None, str | None]] = []
         if not opportunities.empty:
             t = opportunities.iloc[0]
-            steps.append(
+            steps.append((
                 f"**Authorize {t['well_id']}** — "
                 f"{str(t['recommended_intervention']).replace('_', ' ')} "
                 f"(risked NPV ${float(t['est_risked_npv']):,.0f}); build the AFE on "
-                "the **Action Chain**.")
+                "the **Action Chain**.", "Action Chain", str(t["well_id"])))
         if div["divergences"]:
             a = div["divergences"][0]
             net = float(getattr(a, "deferred_bopd", 0.0) or 0.0) * price * nri
-            steps.append(f"**Chase {a.well_id}** — the biggest live leak "
-                         f"(~${net:,.0f}/day net); details on the **Morning Brief**.")
+            steps.append((
+                f"**Chase {a.well_id}** — the biggest live leak "
+                f"(~${net:,.0f}/day net); confirm it on **Surveillance** "
+                "(ranked context on the **Morning Brief**).",
+                "Surveillance", str(a.well_id)))
         if div["n_down"]:
-            steps.append(f"**Restore {div['down'][0]['well_id']}**"
-                         + (f" + {div['n_down'] - 1} more" if div["n_down"] > 1 else "")
-                         + " — zero production right now.")
+            steps.append((
+                f"**Restore {div['down'][0]['well_id']}**"
+                + (f" + {div['n_down'] - 1} more" if div["n_down"] > 1 else "")
+                + " — zero production right now.",
+                "Surveillance", str(div["down"][0]["well_id"])))
         if not steps:
-            steps.append("Hold — the fleet is on trend. Review the watch list on the "
-                         "**Optimization Board**.")
-        for i, s in enumerate(steps[:3], 1):
-            st.markdown(f"{i}. {s}")
+            steps.append(("Hold — the fleet is on trend. Review the watch list on "
+                          "the **Optimization Board**.", None, None))
+        for i, (s, page_title, wid) in enumerate(steps[:3], 1):
+            if wid is not None and page_title is not None:
+                txt, btn = st.columns([11, 2])
+                txt.markdown(f"{i}. {s}")
+                if btn.button("Go →", key=f"home_step_{i}",
+                              help=f"Open {wid} on {page_title} — the well "
+                                   "selection carries; no re-picking."):
+                    if not c.jump_to_well(page_title, wid):
+                        # per-view AppTest harness: no page registry to switch to
+                        st.caption(f"Selected **{wid}** — open **{page_title}** "
+                                   "to continue (the well is now the global "
+                                   "selection).")
+            else:
+                st.markdown(f"{i}. {s}")
+                c.next_step("Optimization Board",
+                            "→ Review the watch list (Optimization Board)")
+        if len(steps[:3]) and steps[0][2] is not None:
+            c.next_step("Morning Brief",
+                        "→ Everything else that needs eyes, ranked (Morning Brief)")
 
 
 def _loop_cards() -> None:
     """Boxed quick-links into the loop (cards pop more than a plain link row)."""
     import views
     cards = [
-        ("Surveillance", "Fleet & per-well production · type-curve check"),
+        ("Surveillance", "Fleet & per-well production · fleet decline check"),
         ("Morning Brief", "Overnight scan — what broke, money-first"),
         ("Optimization Board", "Fleet ranked by risked-NPV opportunity"),
         ("Deferment Overview", "Where the barrels go, by cause"),

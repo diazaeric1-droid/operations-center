@@ -4,6 +4,92 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-07-23
+
+Senior-PE usability audit round 2 — an in-app guidance layer and workflow-seam
+fixes across the whole 6:30am loop, shared conventions with Engineering Workbench
+and Capital Desk (implemented in parallel in all three repos). Progressive
+disclosure only: no number removed, no math changed, vendored `apps/` untouched.
+
+### Added
+- **Page-purpose popovers on all 12 pages (OC-WO-1).** The Capital Desk
+  "ℹ️ What is this page for?" affordance, ported as `views/_common.page_purpose`
+  (product-local — no heal-eviction change needed) and called once per view right
+  under the masthead/context bar: the question the page answers, where in the
+  6:30am loop to open it, how to read the headline output, and the next page in
+  the spine. Tests pin exactly one call per registered page AND one rendered
+  body per page (AppTest).
+- **Clickable "What To Do First" (OC-WO-3).** Home's next steps carry inline
+  *Go →* buttons through the sanctioned `_well_jump` handoff (Action Chain for
+  the authorize step, Surveillance for chase/restore) — the app already knew the
+  well and the destination; now the step is one click. A reconciliation caption
+  under the KPI row explains why the four "problem counts" differ by design
+  (anomalies vs events vs health tiers), repeated in Home's page-purpose body.
+- **Next-step pointers at every dead end (OC-WO-6/7).** `_common.next_step`
+  (st.page_link wrapper, caption fallback under AppTest): the Surveillance
+  drill-down now ends with Well 360 / Action Chain links; the Optimization
+  Board's Recommended Interventions table links straight to the Action Chain
+  with a caption stating the selection carries automatically.
+- **Cross-product pointers at the spine seams (OC-WO-5).** Honest captions
+  (product → page + public URL; well ids carry, page state does not): Action
+  Chain → Capital Desk Draft AFE after the AFE download; Well 360 → Engineering
+  Workbench Well Case File.
+- **Human-readable well labels (OC-WO-9).** `_common.well_label` renders
+  `well_013 · <name> (<lift>)` via `format_func=` on all four pickers (sidebar,
+  Surveillance, Well 360, Action Chain) — values stay raw ids, so all
+  session-state/jump wiring is untouched.
+- **Row-jump parity (OC-WO-8).** Ongoing Events' open-events table and the
+  Morning Brief's classic Detailed Panels (wells down, divergences, ranked
+  anomalies) now row-select → Surveillance, the same `handle_row_jump` path the
+  unified list uses.
+- **'One word, three tiers' on Methods (OC-WO-7).** The canonical mapping of
+  the three 'watch' meanings (map health amber / Home's Elevated Risk / board's
+  economic At-Risk Watch), also flagged in the map's source note.
+- **Per-column header tooltips (OC-WO-6).** `column_config` help on the board's
+  ambiguous columns (Addressable BOPD, NPV Basis, Risk Rank, Downtime Context…)
+  and the Brief/queue tables — the hover-ℹ️ affordance the round-1 PE asked for.
+
+### Changed
+- **SPE exceedance convention for P10/P90 (OC-WO-4).** Display relabel only on
+  the Action Chain Monte-Carlo: the 90th-percentile (upside) NPV is now labeled
+  **P10 (upside)** and the 10th-percentile **P90 (downside)**, matching EW's
+  read-only vendored core (P10 ≥ P50 ≥ P90 for NPV); tornado hover updated; the
+  verbatim portfolio sentence added to Methods; a test pins the mapping.
+- **Recovery Work Queue de-trapped (OC-WO-2).** Queue wells render as
+  `well_013 (loss book)` everywhere, with a hard caption stating these are NOT
+  the surveillance wells sharing the same id — blocks the verified trap of
+  building an AFE for an unrelated well. The inert closing markdown became a
+  real `st.page_link` to the Action Chain (a LINK only — a well jump from this
+  page would be the fake join the console forbids).
+- **Sidebar convergence (OC-WO-11).** Deck sliders → exact `st.number_input`s
+  with the portfolio labels/ranges ("Oil price ($/bbl)" 0–500 step 5, "NRI (net
+  revenue interest)" 0–1 step 0.01; same session keys); canonical NRI help
+  string; PV10 caption now states the DF(m) = (1+r)^(m/12) convention; new
+  caption disclosing Capital Desk additionally nets severance + ad valorem; the
+  well selectbox is labeled "Well" with a console-wide-selection help.
+- **Honest decline-check naming (OC-WO-7).** "On the Type Curve?" →
+  **"On Trend? — Fleet Decline Check"**, with the fit's self-referential nature
+  stated in the section description, the metric help, the per-well overlay note,
+  and Well 360's trend note (it is the fleet's own exponential fit, not an
+  offset-well type curve).
+- **Demo-injection disclosure (OC-WO-8).** Ongoing Events' demo-outage caption
+  now states the injected event exists ONLY on that page (Home/Brief/Board
+  replay without it), and the Open Events / Cumulative Deferred KPIs' help says
+  whether the demo event is included. Default stays ON.
+- **Terminology & export sweep (OC-WO-12).** One money label — "Deferred $/day
+  (net)" — on Home and the Brief ("Deferred at Risk" retired); unit token
+  unified to BOPD (no more "BO/day"); download buttons follow "Download
+  <artifact> (CSV|Markdown|JSON)" (glyph dropped, format tokens capitalized);
+  the context-bar deck cell is the portfolio format string
+  "$70/bbl · NRI 80% · 10.0% disc".
+- **Stage-2 header scoped by lift (OC-WO-10).** The Action Chain's Predict
+  stage titles "Failure-Risk Agent" for non-ESP wells (mirroring Well 360's
+  round-1 fix); the masthead's chain description scopes too. A test pins that a
+  non-ESP well never titles the stage "ESP".
+- **Vendored chrome re-sync (portfolio).** `product_theme.py` keeps EW's
+  padding-bottom fix, documents the switcher's top-of-sidebar position, and
+  bumps `PRODUCT_VERSION` to 0.9.0.
+
 ## [0.8.2] — 2026-07-23
 
 ### Fixed
