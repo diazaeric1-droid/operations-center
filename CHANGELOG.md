@@ -4,6 +4,18 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-07-23
+
+### Fixed
+- **Live Surveillance crash on Streamlit Cloud** (`AttributeError` on `WellMeta.ctb`):
+  the vendored digest `data_loader` lazily inserts its `demo/` dir — which carries an
+  OLD `fleet_registry` copy — at `sys.path[0]`, so after the warm-container self-heal
+  evicted `fleet_registry`, the re-import resolved to the stale demo copy. The heal
+  now re-pins the repo root to `sys.path[0]` on every heal cycle (the top-of-file
+  insert is guarded by `not in sys.path` and never re-pins). Reproduced
+  deterministically before the fix; 2 regression tests pin the re-pin and the
+  resolution-order invariant.
+
 ## [0.8.0] — 2026-07-23
 
 PE field-feedback round 1 — a practicing petroleum engineer reviewed the live console;
