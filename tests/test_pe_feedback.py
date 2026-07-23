@@ -304,3 +304,42 @@ def test_root_fleet_registry_wins_when_root_is_pinned_first():
     finally:
         sys.path[:] = saved_path
         sys.modules["fleet_registry"] = _orig  # preserve module identity for the suite
+
+
+def test_well_jump_handoff_is_consumed_before_the_sidebar_widget():
+    """Cross-page jumps (map click, board/brief row-select) park the target well in
+    _well_jump; app.py must consume it into well_id BEFORE the sidebar selectbox
+    (which OWNS the well_id key) instantiates. A direct mid-page write raises
+    StreamlitAPIException on the live app — AppTest can't fire plotly/dataframe
+    selection events, so this pins the handoff half of the mechanism."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=300)
+    at.session_state["_well_jump"] = "well_042"
+    at.run()
+    assert not at.exception, [str(e.value) for e in at.exception]
+    assert at.session_state["well_id"] == "well_042"
+    assert "_well_jump" not in at.session_state
+
+
+def test_no_mid_script_writes_to_the_widget_owned_well_id_key():
+    """The sidebar selectbox owns key 'well_id', so a page-body write raises live.
+    Legal writers are on_change callbacks (run pre-script) and ensure_state's
+    None-only fallback (reachable only in the per-view harness, where the sidebar
+    widget never rendered). The jump paths must go through _well_jump."""
+    assert 'st.session_state["well_id"]' not in _fn_source("views/_common.py", "jump_to_well")
+    assert 'st.session_state["_well_jump"]' in _fn_source("views/_common.py", "jump_to_well")
+    assert 'st.session_state["well_id"]' not in _fn_source("views/surveillance.py",
+                                                           "_apply_map_selection")
+    assert 'st.session_state["_well_jump"]' in _fn_source("views/surveillance.py",
+                                                          "_apply_map_selection")
+
+
+def _fn_source(rel: str, fn: str) -> str:
+    import ast
+    import textwrap
+
+    tree = ast.parse((ROOT / rel).read_text())
+    node = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == fn)
+    return textwrap.dedent(ast.get_source_segment((ROOT / rel).read_text(), node))

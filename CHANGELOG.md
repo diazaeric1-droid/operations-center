@@ -4,6 +4,19 @@ All notable changes to Operations Center are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.2] — 2026-07-23
+
+### Fixed
+- **Live map-click / row-jump crash** (`StreamlitAPIException` writing
+  `st.session_state["well_id"]`): the sidebar well selector OWNS the `well_id`
+  widget key, so the map handler's and `jump_to_well`'s mid-page writes were
+  illegal the moment the sidebar rendered — a path AppTest cannot reach because
+  the harness never fires plotly/dataframe selection events. Jumps now park the
+  target in a `_well_jump` handoff key that `app.py` consumes at the top of the
+  run, before the sidebar widget instantiates (the map handler reruns explicitly;
+  its sentinel already prevents a loop). 2 new tests pin the handoff and guard
+  against future mid-script writers.
+
 ## [0.8.1] — 2026-07-23
 
 ### Fixed

@@ -102,9 +102,12 @@ def _apply_map_selection(event) -> None:
     if not wid or st.session_state.get("_surv_map_handled") == wid:
         return
     st.session_state["_surv_map_handled"] = wid
-    # The map renders ABOVE the drill-down selectbox, whose pre-sync reads well_id
-    # before the widget instantiates — so the clicked well lands preselected this run.
-    st.session_state["well_id"] = wid
+    # Writing well_id here would raise StreamlitAPIException — the sidebar selectbox
+    # owns that key and has already rendered this run. Park the target for app.py's
+    # top-of-run handoff and rerun; the sentinel above stops the rerun from looping,
+    # and the next run's drill-down pre-sync picks the well up before its selectbox.
+    st.session_state["_well_jump"] = wid
+    st.rerun()
 
 
 def render() -> None:
