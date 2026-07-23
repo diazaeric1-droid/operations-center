@@ -79,7 +79,7 @@ def render() -> None:
         "- **When:** whenever a well surfaces anywhere in the loop (map click, "
         "Brief row, board row) and you want the whole picture before acting.\n"
         "- **Headline read:** the status verdict banner — OPPORTUNITY (act, "
-        "risked NPV $) / AT-RISK WATCH (losing $/day but the fix doesn't pay "
+        "risked NPV \\$) / AT-RISK WATCH (losing \\$/day but the fix doesn't pay "
         "yet) / STABLE (nothing to do) — plus the *30-Day Failure Signal* (a "
         "Platt-calibrated probability, i.e. the model's raw scores rescaled so "
         "'60%' really means ~60%).\n"
