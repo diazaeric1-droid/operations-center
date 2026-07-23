@@ -477,7 +477,10 @@ def jump_to_well(page_title: str, well_id: str) -> bool:
     page = views.PAGE_OBJECTS.get(page_title)
     if page is None:
         return False
-    st.session_state["well_id"] = str(well_id)
+    # Park the target for app.py's top-of-run handoff — writing well_id here would
+    # raise StreamlitAPIException (the sidebar selectbox owns that key and has
+    # already rendered this run).
+    st.session_state["_well_jump"] = str(well_id)
     st.switch_page(page)
     return True
 

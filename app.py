@@ -109,6 +109,16 @@ if not _artifacts_ready():
 for _k, _v in c.STATE_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
 
+# Cross-page well-jump handoff. Page bodies must NEVER write
+# st.session_state["well_id"] directly: the sidebar selectbox below OWNS that key,
+# and Streamlit raises StreamlitAPIException on any write to a widget-owned key
+# after the widget has rendered in the run (the map-click and row-jump paths run
+# mid-page, long after the sidebar). Jumps park the target in _well_jump instead;
+# it is consumed HERE — before the widget instantiates — where the write is legal.
+_jump = st.session_state.pop("_well_jump", None)
+if _jump is not None:
+    st.session_state["well_id"] = str(_jump)
+
 _well_ids = c.scada_well_ids()
 if st.session_state["well_id"] not in _well_ids:
     st.session_state["well_id"] = _well_ids[0] if _well_ids else None
