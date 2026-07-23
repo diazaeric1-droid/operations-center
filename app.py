@@ -120,12 +120,14 @@ with st.sidebar:
     st.subheader("Price deck")
     st.slider("Oil price ($/bbl)", min_value=20.0, max_value=150.0, step=1.0,
               key="oil_price",
-              help="Realized price — drives deferred-$, triage ranking, and AFE "
+              help="Realized price — drives deferred-$, the board ranking, and AFE "
                    "economics.")
-    st.slider("Net revenue interest (NRI)", min_value=0.0, max_value=1.0,
+    st.slider("Deck NRI (chain economics)", min_value=0.0, max_value=1.0,
               step=0.01, key="nri",
-              help="Share of revenue after royalty; nets the revenue side of "
-                   "triage + AFE economics.")
+              help="Share of revenue after royalty; nets the revenue side of the "
+                   "board ranking + AFE economics (one auditable number for capital "
+                   "decisions). Per-WELL NRI for the roll-up pages' NET views is "
+                   "edited on Sources & BYOD.")
     st.caption("Discounting is fixed at **PV10** (10%) — the AFE component's "
                "certified economics kernel; every NPV on the console uses it.")
     st.text_input("Anthropic API key (optional)", type="password",

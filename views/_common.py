@@ -15,6 +15,7 @@ import pandas as pd
 import streamlit as st
 
 import core
+import fleet_registry
 import theme
 
 # Canonical per-lift diagnostic channels for the per-well drill-downs, shared by
@@ -51,6 +52,9 @@ STATE_DEFAULTS: dict = {
     "scada_source": "disk",       # "disk" | "upload" — which fleet Brief/Events use
     "deferment_upload": None,     # bytes | None — tidy monthly production CSV
     "deferment_upload_name": "",
+    # per-well NRI session overrides (Data page editor) + the GROSS/NET display toggle
+    "nri_overrides": {},          # {well_id: nri} — session-only, wins over the registry
+    "net_view": False,            # False = gross (8/8); True = net (per-well NRI)
 }
 
 
@@ -157,7 +161,7 @@ def board(price: float, nri: float) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def deferred_by_well(token: str, price: float) -> dict:
     """Per-well deferred bopd from the digest's rate-loss scan — the REAL money
-    signal. The Triage Board ranks on the ESP alert feed, which carries no deferred
+    signal. The Optimization Board ranks on the ESP alert feed, which carries no deferred
     barrels by design (an ESP failure signature ≠ a quantified rate loss), so the
     board's own deferred column is zero; this joins the digest's decline-aware
     rate-loss detector back in for an honest deferred-$ column."""
@@ -387,6 +391,196 @@ def alert_for_selected(price: float) -> dict:
 def diagnosis(well_id: str, price: float) -> dict:
     a = core.alert_for(well_id, price_per_bbl=price, alerts=alerts(price))
     return core.diagnose(a)
+
+
+# ---- per-well NRI + GROSS/NET convention (PE feedback round 1) ----------------
+
+def well_nri(well_id: str, overrides: dict | None = None) -> float:
+    """Per-well NRI: the session override from the Data-page editor if one exists,
+    else the registry's deterministic default. ``overrides`` is injectable for
+    headless tests; views let it default to session state."""
+    if overrides is None:
+        overrides = st.session_state.get("nri_overrides") or {}
+    try:
+        v = overrides.get(str(well_id))
+        return float(v) if v is not None else float(fleet_registry.nri_for(str(well_id)))
+    except Exception:  # noqa: BLE001
+        return float(st.session_state.get("nri", 0.80))
+
+
+def nri_map(well_ids, overrides: dict | None = None) -> dict[str, float]:
+    """{well_id: per-well NRI} for a set of wells (override → registry default)."""
+    return {str(w): well_nri(str(w), overrides) for w in well_ids}
+
+
+def gross_net_toggle() -> bool:
+    """The shared GROSS (8/8) vs NET (per-well NRI) display toggle — one session key
+    (``net_view``) so the choice follows the user across roll-up pages. Returns True
+    when NET is active."""
+    st.toggle(
+        "Net to interest (× per-well NRI)", key="net_view",
+        help="OFF = gross (8/8 working interest), the standard base-management "
+             "convention. ON = net entitlement: each well's volumes/dollars × its "
+             "OWN NRI (registry default, editable per well on Sources & BYOD). "
+             "The certified ranking economics still use the sidebar deck NRI.")
+    return bool(st.session_state.get("net_view"))
+
+
+# ---- CTB / lift / basin / county fleet filters (PE feedback round 1) -----------
+
+def filter_ids_by_meta(well_ids, ctb=(), lift=(), basin=(), area=()) -> list[str]:
+    """Pure filter: the well ids whose registry metadata passes every ACTIVE filter
+    (an empty selection means 'no filter' on that dimension). Streamlit-free."""
+    out = []
+    for w in well_ids:
+        m = fleet_registry.get(str(w))
+        if ctb and m.ctb not in ctb:
+            continue
+        if lift and m.lift not in lift:
+            continue
+        if basin and m.basin not in basin:
+            continue
+        if area and m.area not in area:
+            continue
+        out.append(str(w))
+    return out
+
+
+def fleet_filter_controls(key_prefix: str, well_ids) -> list[str]:
+    """Render the shared CTB / lift / basin / county multiselects (empty = all) and
+    return the well ids passing every active filter. Defaults reproduce the
+    unfiltered fleet exactly."""
+    metas = [fleet_registry.get(str(w)) for w in well_ids]
+    cols = st.columns(4)
+    ctb = cols[0].multiselect("CTB (tank battery)", sorted({m.ctb for m in metas}),
+                              key=f"{key_prefix}_f_ctb")
+    lift = cols[1].multiselect("Lift type", sorted({m.lift for m in metas}),
+                               key=f"{key_prefix}_f_lift")
+    basin = cols[2].multiselect("Basin", sorted({m.basin for m in metas}),
+                                key=f"{key_prefix}_f_basin")
+    area = cols[3].multiselect("County", sorted({m.area for m in metas}),
+                               key=f"{key_prefix}_f_area")
+    return filter_ids_by_meta(well_ids, ctb=set(ctb), lift=set(lift),
+                              basin=set(basin), area=set(area))
+
+
+# ---- cross-page drill-through (PE feedback round 1) ----------------------------
+
+def jump_to_well(page_title: str, well_id: str) -> bool:
+    """Set the global selected well and switch to ``page_title`` (e.g. Surveillance,
+    whose drill-down pre-syncs from ``well_id``). Returns False when the page object
+    isn't registered (per-view AppTest harness) so callers can render a fallback
+    caption instead. NOTE: ``st.switch_page`` ends the current run by raising
+    Streamlit's rerun control-flow exception — never wrap this call in a bare
+    ``except Exception``."""
+    import views
+    page = views.PAGE_OBJECTS.get(page_title)
+    if page is None:
+        return False
+    st.session_state["well_id"] = str(well_id)
+    st.switch_page(page)
+    return True
+
+
+def handle_row_jump(event, source_frame, sentinel_key: str,
+                    page_title: str = "Surveillance") -> None:
+    """Shared single-row-selection → drill-through handler for st.dataframe tables.
+    Reads the selected row POSITION from the selection event, maps it to
+    ``source_frame['well_id']`` (never the formatted display frame), dedupes with a
+    session sentinel (dataframe selection state persists across reruns), and jumps.
+    None-safe for the AppTest harness."""
+    try:
+        rows = list(event.selection.rows) if event is not None else []
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        # Deselect (empty selection event) — clear the sentinel so the same row
+        # can be re-selected later.
+        st.session_state.pop(sentinel_key, None)
+        return
+    if source_frame is None or not len(source_frame):
+        return
+    pos = rows[0]
+    if pos >= len(source_frame):
+        return
+    wid = str(source_frame.iloc[pos]["well_id"])
+    if st.session_state.get(sentinel_key) == wid:
+        return  # stale selection re-fired on return to this page — ignore
+    st.session_state[sentinel_key] = wid
+    if not jump_to_well(page_title, wid):
+        st.caption(f"Selected **{wid}** — open **{page_title}** to review it "
+                   "(the well is now the global selection).")
+
+
+# ---- downtime context for recommendations (PE feedback round 1) ----------------
+
+@st.cache_data(show_spinner=False)
+def ongoing_event_days(token: str, price: float) -> dict[str, int]:
+    """{well_id: running duration (days)} of OPEN downtime events (NEW/ONGOING, not
+    acknowledged) from the event state machine — replayed WITHOUT the demo outage
+    injection so recommendations are never gated on a demo artifact."""
+    return {str(e.well_id): int(e.duration_days)
+            for e in replay_events(token, price, False)
+            if e.state in ("NEW", "ONGOING")
+            and not getattr(e, "acknowledged", False)}
+
+
+NO_CHOKE_CAPTION = (
+    "The SCADA set carries no choke-position channel, so choke moves can't be "
+    "separated from reservoir/lift losses here — recommendations are gated on "
+    "downtime state (ongoing-event context) instead of choke data.")
+
+
+# ---- unified morning-brief list (PE feedback round 1) --------------------------
+
+BRIEF_STATUS_ORDER = {"NEW": 0, "ONGOING": 1, "RESOLVED": 2}
+
+
+def unified_brief_frame(events, anomalies, nri_by_well: dict,
+                        net_view: bool, price: float) -> pd.DataFrame:
+    """ONE ranked list for the Morning Brief: state-machine events (NEW / ONGOING /
+    RESOLVED) plus active scan anomalies on wells with no open event, ordered by
+    today's BO/day impact (net of per-well NRI when ``net_view``), status as the
+    tiebreaker. When a well has both an open event and a scan anomaly, the EVENT's
+    deferral is used (the two windows differ slightly). Pure / streamlit-free."""
+    rows: list[dict] = []
+    open_wells: set[str] = set()
+    for e in events or []:
+        if getattr(e, "acknowledged", False):
+            continue
+        state = str(e.state)
+        if state not in BRIEF_STATUS_ORDER:
+            continue
+        wid = str(e.well_id)
+        gross = (float(getattr(e, "last_deferred_bopd", 0.0) or 0.0)
+                 if state in ("NEW", "ONGOING") else 0.0)
+        rows.append({"well_id": wid, "status": state,
+                     "kind": str(e.event_type), "days": int(e.duration_days),
+                     "gross_bopd": round(gross, 1),
+                     "cum_bbl": round(float(getattr(e, "deferred_bopd", 0.0) or 0.0), 0)})
+        if state in ("NEW", "ONGOING"):
+            open_wells.add(wid)
+    for a in anomalies or []:
+        wid = str(a.well_id)
+        if getattr(a, "acknowledged", False) or wid in open_wells:
+            continue
+        rows.append({"well_id": wid, "status": "NEW", "kind": str(a.category),
+                     "days": None,
+                     "gross_bopd": round(float(getattr(a, "deferred_bopd", 0.0) or 0.0), 1),
+                     "cum_bbl": None})
+    if not rows:
+        return pd.DataFrame(columns=["well_id", "status", "kind", "days",
+                                     "gross_bopd", "net_bopd", "rank_bopd",
+                                     "usd_per_day", "cum_bbl"])
+    df = pd.DataFrame(rows)
+    df["net_bopd"] = (df["well_id"].map(lambda w: nri_by_well.get(str(w), 0.8))
+                      * df["gross_bopd"]).round(1)
+    df["rank_bopd"] = df["net_bopd"] if net_view else df["gross_bopd"]
+    df["usd_per_day"] = (df["rank_bopd"] * price).round(0)
+    df["_ord"] = df["status"].map(BRIEF_STATUS_ORDER)
+    df = df.sort_values(["rank_bopd", "_ord", "well_id"],
+                        ascending=[False, True, True], kind="mergesort")
+    return df.drop(columns="_ord").reset_index(drop=True)
 
 
 def pinned_pv10_caption() -> None:

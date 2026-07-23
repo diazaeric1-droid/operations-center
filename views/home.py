@@ -20,12 +20,12 @@ def render() -> None:
     fleet = c.fleet_for_token(token)
     anomalies = c.scan(token, price)
     active = [a for a in anomalies if not a.acknowledged]
-    # Net deferred (× NRI) so the headline matches the Triage Board / chain economics.
+    # Net deferred (× NRI) so the headline matches the Optimization Board / chain economics.
     net_deferred_usd = sum(float(getattr(a, "deferred_bopd", 0.0) or 0.0)
                            for a in active) * price * nri
 
-    # Same gated tiers the Triage Board uses (real deferred + signal-gated), so Home's
-    # "Top Opportunity" is exactly the Triage Board's #1 — with currently-down wells held
+    # Same gated tiers the Optimization Board uses (real deferred + signal-gated), so Home's
+    # "Top Opportunity" is exactly the Optimization Board's #1 — with currently-down wells held
     # out into the Restore queue first (a shut-in well isn't a priced opportunity).
     b = c.board_with_deferred(price, nri)
     _restore, b_live = c.restore_tier(b, c.down_well_set(c.DISK_TOKEN))
@@ -51,9 +51,9 @@ def render() -> None:
         {"label": "Deferred $/day (net)", "value": f"${net_deferred_usd:,.0f}",
          "delta_color": "inverse",
          "help": "Active anomalies' deferred barrels × deck oil price × NRI "
-                 "(net-to-operator — same convention as the Triage Board)."},
+                 "(net-to-operator — same convention as the Optimization Board)."},
         {"label": f"Top Opportunity · {top_label}", "value": top_value,
-         "help": "Largest VALUE-ACCRETIVE intervention on the Triage Board "
+         "help": "Largest VALUE-ACCRETIVE intervention on the Optimization Board "
                  "(positive risk-weighted NPV). 'none today' means no intervention "
                  "currently clears its cost — the fleet is being held, not worked."},
     ])
@@ -62,12 +62,12 @@ def render() -> None:
     if core.risk_scoring_degraded():
         st.warning("⚠️ **ESP risk model unavailable** — fleet risk is showing the "
                    f"baseline {core.BASELINE_RISK_30D:.0%}; the Top Opportunity / "
-                   "triage figures reflect deferred production only until the model "
+                   "board figures reflect deferred production only until the model "
                    "is restored (re-run bootstrap).")
     if token != c.DISK_TOKEN:
         st.caption("Note: Open Alerts and Deferred $/day reflect **your uploaded "
-                   "fleet**, but Top Opportunity and the Triage Board still run on the "
-                   "synthetic demo fleet (the triage ranking isn't wired to BYOD yet) "
+                   "fleet**, but Top Opportunity and the Optimization Board still run on the "
+                   "synthetic demo fleet (the board ranking isn't wired to BYOD yet) "
                    "— so the 'authorize' step below may name a synthetic well.")
 
     _fleet_health(fleet, anomalies, b)
@@ -76,8 +76,8 @@ def render() -> None:
     _what_broke_and_next(anomalies, fleet, opportunities, price, nri, events)
 
     pt.section("The Morning Loop",
-               "Jump straight to the work — surveillance → brief → triage → "
-               "loss accounting → action chain.")
+               "Jump straight to the work — surveillance → brief → optimization "
+               "board → loss accounting → action chain.")
     _loop_cards()
 
     with st.expander("Methods — two datasets, stated plainly"):
@@ -153,7 +153,7 @@ def _what_broke_and_next(anomalies, fleet, opportunities, price, nri, events) ->
                          + " — zero production right now.")
         if not steps:
             steps.append("Hold — the fleet is on trend. Review the watch list on the "
-                         "**Triage Board**.")
+                         "**Optimization Board**.")
         for i, s in enumerate(steps[:3], 1):
             st.markdown(f"{i}. {s}")
 
@@ -164,7 +164,7 @@ def _loop_cards() -> None:
     cards = [
         ("Surveillance", "Fleet & per-well production · type-curve check"),
         ("Morning Brief", "Overnight scan — what broke, money-first"),
-        ("Triage Board", "Fleet ranked by risked-NPV opportunity"),
+        ("Optimization Board", "Fleet ranked by risked-NPV opportunity"),
         ("Deferment Overview", "Where the barrels go, by cause"),
         ("Action Chain", "Detect → predict → authorize an AFE"),
     ]
@@ -234,7 +234,7 @@ def _fleet_health(fleet: dict, anomalies: list, board) -> None:
         "in Impaired, not double-counted here — so a low amber count means the high-risk "
         "wells are already in the red, not that nothing is at risk.) The score is "
         "Platt-calibrated (model trained on this fleet's labeled faults; card on Methods & "
-        "Limitations). Distinct from the Triage Board's economic 'Watch' tier (a losing "
+        "Limitations). Distinct from the Optimization Board's economic 'Watch' tier (a losing "
         "well an intervention wouldn't pay for yet). All figures deterministic — no API "
         "key required.")
 

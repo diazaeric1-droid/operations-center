@@ -75,7 +75,7 @@ def render() -> None:
             f"only the top {ev['n_flagged_top10pct']} wells can recover at most "
             f"~{ev['n_flagged_top10pct']}/{ev['n_positives']} of the impaired fleet; at the "
             "quartile cut the board actually flags on, recall is higher (full panel on the "
-            "Triage Board). **AUROC and Brier are END-TO-END calibrated out-of-fold** — "
+            "Optimization Board). **AUROC and Brier are END-TO-END calibrated out-of-fold** — "
             "each CV fold trains the booster AND Platt-calibrates it before scoring the "
             "held-out wells, exactly as the shipped model does — so the Brier describes the "
             "calibrated probabilities the console actually displays, not a raw booster.")
@@ -97,7 +97,7 @@ def render() -> None:
         "drop — not this synthetic figure — would be the real measure of skill. We don't "
         "quote a specific real-world AUROC because we have no labeled operator historian to "
         "measure one on; treat it as an engineering expectation, not a result. If the model "
-        "can't load at all, every well falls back to a baseline risk and the Triage Board / "
+        "can't load at all, every well falls back to a baseline risk and the Optimization Board / "
         "Home show a visible **degradation banner** rather than a misleading uniform fleet.")
 
     pt.section("Lift-aware interventions")
@@ -109,7 +109,25 @@ def render() -> None:
         "trigger — actively deferring production OR the fleet's elevated-risk quartile — "
         "not merely a cheap intervention that happens to pencil. This ranking is "
         "mirrored bit-for-bit against the PE-Pipeline orchestrator (a parity test pins "
-        "them identical).")
+        "them identical).\n\n"
+        "**Downtime context, not choke data.** Recommendations for wells in an OPEN "
+        "event (state machine NEW/ONGOING) carry a visible *'verify post-restart before "
+        "acting'* flag on the Optimization Board, Well 360, and the Action Chain. The "
+        "SCADA schema carries **no choke-position channel**, so choke moves cannot be "
+        "separated from reservoir/lift losses — a stated limitation (disclosed in-page "
+        "where recommendations render), not something the console models.")
+
+    pt.section("NRI conventions — deck vs per-well")
+    st.markdown(
+        "- **Certified chain/ranking economics** (risked NPV, AFE, Monte-Carlo) use the "
+        "**sidebar deck NRI** — one flat, auditable number, matching pe-pipeline parity.\n"
+        "- **Roll-up NET views** (Morning Brief unified list, Optimization Board "
+        "deferred-$ columns, Deferment Overview) can apply **per-well NRI** — a "
+        "deterministic, varied registry default (≈0.73–0.85) with session-only "
+        "per-well overrides on **Sources & BYOD**. GROSS (8/8) stays the default "
+        "base-management convention.\n"
+        "- The registry NRI is **synthetic and illustrative** — real division-order "
+        "data replaces it in a deployment.")
 
     pt.section("Two datasets, no fake join")
     n = len(c.scada_well_ids())
@@ -128,12 +146,12 @@ def render() -> None:
     sc = _scorecard(price, nri)
     if sc:
         st.markdown(
-            f"- **Triage ranking:** scored against the fleet's known seeded faults — "
+            f"- **Board ranking:** scored against the fleet's known seeded faults — "
             f"precision@10 **{sc['at_k'][10]['precision']:.0%}** "
             f"({sc['at_k'][10]['lift']:.1f}× lift over random), "
             f"recall@{sc['n_impaired']} **{sc['recall_at_n_impaired']:.0%}**. Honest, "
             "not a trivial 100% — low-rate failure modes defer few barrels and rank "
-            "lower. (Full panel on the Triage Board.)")
+            "lower. (Full panel on the Optimization Board.)")
     st.markdown(
         "- **Digest event detector:** backtested with near-threshold decoys so "
         "precision/recall aren't trivially 1.0; a real lead-time/latency metric.\n"

@@ -166,6 +166,13 @@ def render() -> None:
     m2.metric("Suspected Mode", mode_short, help=mode_full)
     m3.metric("Intervention", diag["intervention"].replace("_", " "))
     st.caption(diag["primary_diagnosis"])
+    ev_days = c.ongoing_event_days(c.DISK_TOKEN, price)
+    if str(well_id) in ev_days:
+        st.warning(f"⚠ **{well_id} is in an ongoing downtime event "
+                   f"({ev_days[str(well_id)]}d running)** — verify the post-restart "
+                   "rate before acting on this recommendation (the signature and "
+                   "economics recompute once the well is back on trend).")
+    st.caption(c.NO_CHOKE_CAPTION)
     if is_unclear:
         st.info("⚠️ **Mode is ambiguous — diagnose before acting.** The classifier found "
                 "no single dominant signature, so the mapped intervention below is a "
@@ -220,6 +227,10 @@ def render() -> None:
                    "the per-job horizon is a documented limitation, see Methods → "
                    "Economics).")
     c.pinned_pv10_caption()
+    st.caption("NRI convention: chain/AFE economics use the **sidebar deck NRI** "
+               "(one auditable number for capital decisions); the per-well NRI table "
+               "on Sources & BYOD applies to the surveillance / brief / board "
+               "roll-ups' NET views, not to this AFE.")
 
     # ---- Monte-Carlo economics: the distributional view a capital review expects ---
     pt.section("Monte-Carlo Economics — P10 / P50 / P90",

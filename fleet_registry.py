@@ -20,12 +20,23 @@ A handful of curated "hero wells" carry a consistent cross-app storyline so the 
 well reads coherently end-to-end (Monitor → Diagnose → Predict → Quantify → Authorize).
 Every other ``well_0NN`` gets deterministic, stable metadata derived from its number,
 so a lookup never fails and never changes between runs.
+
+ADDITIVE EXTENSION (2026-07 · PE field-feedback round 1, Operations Center):
+``surface_latlon`` (synthetic surface coordinates — county centroid + deterministic
+within-county jitter, the exact formula the Operations Center map already used),
+``ctb_for`` (deterministic central-tank-battery assignment, clustered by county),
+and ``nri_for`` (deterministic per-well net revenue interest, varied across wells
+like a real asset), each mirrored as a read-only property on ``WellMeta``
+(``lat`` / ``lon`` / ``ctb`` / ``nri``) so ``enrich`` can join them. META_COLUMNS
+gained ``ctb`` and ``nri``. Purely additive: no existing field or value changed.
+This diverges this copy from sibling repos until they take the same block.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 
-META_COLUMNS = ("basin", "area", "formation", "lift", "lateral_length_ft", "peer_group", "hero")
+META_COLUMNS = ("basin", "area", "formation", "lift", "lateral_length_ft", "peer_group",
+                "hero", "ctb", "nri")
 
 # Onshore Permian geology (public/generic — not proprietary).
 _MIDLAND_FM = ["Wolfcamp A", "Wolfcamp B", "Spraberry (Lower)", "Spraberry (Jo Mill)", "Dean"]
@@ -53,6 +64,25 @@ class WellMeta:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+    # -- additive derived attributes (2026-07) — properties, not fields, so the
+    # frozen constructor signature, as_dict(), and every existing caller are
+    # untouched; ``enrich`` reaches them via getattr like any field.
+    @property
+    def lat(self) -> float:
+        return surface_latlon(self.well_id)[0]
+
+    @property
+    def lon(self) -> float:
+        return surface_latlon(self.well_id)[1]
+
+    @property
+    def ctb(self) -> str:
+        return ctb_for(self.well_id)
+
+    @property
+    def nri(self) -> float:
+        return nri_for(self.well_id)
 
 
 # --- curated hero wells (storyline consistent with the apps' demo behavior) ----
@@ -135,6 +165,57 @@ def get(well_id: str) -> WellMeta:
 def hero_wells() -> list[WellMeta]:
     """The curated hero wells, in id order."""
     return [_HERO[k] for k in sorted(_HERO)]
+
+
+# --- synthetic surface coordinates / CTB / per-well NRI (deterministic, additive) --
+# Approximate centroids of the Permian counties the registry uses, so the map is
+# geographically honest at the county level. Per-well coordinates are SYNTHETIC —
+# centroid + a stable jitter seeded off the well number (the registry carries no
+# real surface locations). Same formula the Operations Center map used before this
+# block existed, so no well moved when the logic migrated here.
+_COUNTY_LATLON: dict[str, tuple[float, float]] = {
+    "Martin": (32.30, -101.95), "Midland": (31.87, -102.03),
+    "Howard": (32.31, -101.44), "Glasscock": (31.87, -101.52),
+    "Reeves": (31.42, -103.69), "Loving": (31.85, -103.58),
+    "Ward": (31.51, -103.10), "Culberson": (31.44, -104.52),
+}
+
+
+def _county_of(well_id: str) -> str:
+    return get(well_id).area.split(" Co.")[0].strip()
+
+
+def surface_latlon(well_id: str) -> tuple[float, float]:
+    """Deterministic synthetic surface (lat, lon): the well's county centroid plus a
+    stable within-county jitter seeded off the well number. Synthetic by design —
+    never changes between runs, never raises (unknown counties fall back to a
+    mid-Permian anchor)."""
+    import numpy as np
+    lat0, lon0 = _COUNTY_LATLON.get(_county_of(well_id), (31.8, -102.5))
+    rng = np.random.default_rng(_suffix(well_id) * 2654435761 % (2 ** 32))
+    return (lat0 + float(rng.uniform(-0.13, 0.13)),
+            lon0 + float(rng.uniform(-0.16, 0.16)))
+
+
+def ctb_for(well_id: str) -> str:
+    """Deterministic central-tank-battery (CTB) assignment: two batteries per county,
+    wells stably grouped by their number so pads read like a real gathering layout
+    (e.g. ``"Reeves CTB-1"``). Purely derived — never changes between runs."""
+    n = _suffix(well_id)
+    return f"{_county_of(well_id)} CTB-{(n // 8) % 2 + 1}"
+
+
+def nri_for(well_id: str) -> float:
+    """Deterministic per-well net revenue interest, varied across wells like a real
+    asset (mixed royalty burdens): a basin-level base (Midland 0.80 / Delaware 0.77)
+    plus a seeded per-well adjustment, landing in ≈0.73–0.85. Synthetic and
+    illustrative — session overrides on the Operations Center Data page win over
+    this default. Never changes between runs."""
+    import random as _random
+    meta = get(well_id)
+    base = 0.80 if meta.basin == "Midland" else 0.77
+    rng = _random.Random(_suffix(well_id) * 9176 + 3)
+    return round(base + rng.uniform(-0.07, 0.05), 4)
 
 
 # --- synthetic intervention / workover history (deterministic, additive) -------

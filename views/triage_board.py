@@ -1,7 +1,9 @@
-"""Today · Triage Board — the whole fleet ranked by risked-NPV opportunity.
+"""Today · Optimization Board — the whole fleet ranked by risked-NPV opportunity.
 
-Ported from pe-pipeline's Fleet Triage overview (same ranking engine — the
-product tests pin numeric equality against pipeline_core.rank_fleet).
+Ported from pe-pipeline's fleet-triage overview (same ranking engine — the
+product tests pin numeric equality against pipeline_core.rank_fleet). Renamed
+from the earlier "triage board" title per PE field feedback (module filename kept
+to avoid import churn; every user-visible string says Optimization Board).
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ def render() -> None:
     c.ensure_state()
     price, nri, _disc = c.deck()
 
-    pt.masthead("ops", "Triage Board",
+    pt.masthead("ops", "Optimization Board",
                 "Every well ranked by the risk-weighted dollars an intervention "
                 "could protect — where to look first.")
     pt.context_bar([
@@ -31,11 +33,26 @@ def render() -> None:
     theme.data_badge("synthetic", "Modeled daily SCADA fleet with known ground truth "
                                   "— public production is monthly, not daily.")
 
-    board = fr.enrich(c.board_with_deferred(price, nri))
-    if board.empty:
-        pt.empty_state("No wells in the fleet — nothing to triage.",
+    full_board = fr.enrich(c.board_with_deferred(price, nri))
+    if full_board.empty:
+        pt.empty_state("No wells in the fleet — nothing to rank.",
                        "Run bootstrap (first app start) to generate the fleet.")
         return
+    with st.expander("Filters — CTB · lift type · basin · county", expanded=False):
+        keep = set(c.fleet_filter_controls("ob", list(full_board["well_id"].astype(str))))
+    board = full_board[full_board["well_id"].astype(str).isin(keep)] \
+        .reset_index(drop=True)
+    net_view = c.gross_net_toggle()
+    if len(board) < len(full_board):
+        st.caption(f"Filtered: **{len(board)} of {len(full_board)}** wells — the KPIs "
+                   "and tiers below reflect the filtered selection (the CSV export "
+                   "stays full-fleet).")
+        if board.empty:
+            pt.empty_state("No wells match the active filters.",
+                           "Clear a filter above to bring wells back.")
+            return
+    nmap = c.nri_map(board["well_id"].astype(str))
+    ev_days = c.ongoing_event_days(c.DISK_TOKEN, price)
     import core
     if core.risk_scoring_degraded():
         st.warning("⚠️ **ESP risk model unavailable** — every well is showing the "
@@ -48,8 +65,12 @@ def render() -> None:
     restore, board_live = c.restore_tier(board, c.down_well_set(c.DISK_TOKEN))
     opportunities, watch, stable = c.triage_tiers(board_live)
 
+    _sel_def_label, _sel_def = _deferred_usd_display(board, nmap, net_view, price)
     pt.kpi_row([
-        {"label": "Fleet Size", "value": f"{len(board)} wells"},
+        {"label": "Selection", "value": f"{len(board)} wells",
+         "delta": (f"of {len(full_board)} fleet"
+                   if len(board) < len(full_board) else None),
+         "delta_color": "off"},
         {"label": "Opportunities", "value": f"{len(opportunities)}",
          "help": "Wells with a real trigger (deferring production, the fleet's top-quartile "
                  "risk, OR ≥50% calibrated failure probability) whose recommended, "
@@ -64,11 +85,19 @@ def render() -> None:
         {"label": "Addressable Risked NPV",
          "value": f"${float(opportunities['est_risked_npv'].sum()):,.0f}",
          "help": "Σ of the positive risk-weighted net-to-operator NPV across the "
-                 "value-accretive interventions. Total fleet deferment runs "
-                 f"${float(board['deferred_usd_per_day'].sum()):,.0f}/day (net)."},
+                 "value-accretive interventions (certified economics at the deck "
+                 "NRI). The selection's deferment runs "
+                 f"${float(_sel_def.sum()):,.0f}/day "
+                 f"({'net, per-well NRI' if net_view else 'gross 8/8'})."},
     ])
+    st.caption(
+        f"Selection deferment: **{float(board['deferred_bopd'].sum()):,.0f} bbl/day "
+        f"gross** · **${float(_sel_def.sum()):,.0f}/day "
+        f"{'net (per-well NRI)' if net_view else 'gross'}**. The certified ranking "
+        "economics (risked NPV) use the sidebar deck NRI; the toggle above re-states "
+        "displayed deferred-$ columns only.")
 
-    _ranking_scorecard(board)
+    _ranking_scorecard(full_board)
 
     if not restore.empty:
         pt.section("Restore First — Wells Down",
@@ -79,13 +108,21 @@ def render() -> None:
         rt = pd.DataFrame({
             "Well": [f"★ {w}" if h else w
                      for w, h in zip(restore["well_id"], restore["hero"])],
+            "CTB": restore["ctb"],
             "Field": restore["basin"] + " · " + restore["formation"],
             "Lift": restore["lift"],
+            "Down (days)": [f"{ev_days[str(w)]}d" if str(w) in ev_days else "—"
+                            for w in restore["well_id"]],
             "30-Day Risk Signal": restore["failure_risk_30d"].map(lambda x: f"{x:.0%}"),
             "Status": "down — restore production first",
         })
-        st.dataframe(rt, width="stretch", hide_index=True)
-        st.caption("Currently down (≈0 production vs the well's own baseline). The "
+        ev_r = st.dataframe(rt, width="stretch", hide_index=True,
+                            on_select="rerun", selection_mode="single-row",
+                            key="ob_restore_sel")
+        c.handle_row_jump(ev_r, restore, "_ob_restore_jump")
+        st.caption("Currently down (≈0 production vs the well's own baseline). "
+                   "'Down (days)' is the open event's running duration from the event "
+                   "state machine. Select a row to open the well on Surveillance. The "
                    "economic limit and any priced intervention recompute off the "
                    "recovered rate once the well is back online — see Well 360.")
 
@@ -127,25 +164,36 @@ def render() -> None:
             "economics at the deck price/NRI). The cost is certain, so only the upside "
             "is chance-weighted. The bar is labeled with the intervention to run.")
         c.pinned_pv10_caption()
-        hero = fr.get(str(opportunities["well_id"].iloc[0]))
+        top_wid = str(opportunities["well_id"].iloc[0])
+        if top_wid in ev_days:
+            st.warning(f"⚠ **{top_wid} is in an ongoing downtime event "
+                       f"({ev_days[top_wid]}d)** — verify the post-restart rate "
+                       "before acting on its recommendation.")
+        hero = fr.get(top_wid)
         if hero.hero:
             st.info(f"**{hero.well_id} — {hero.name}** · {hero.basin} Basin · "
                     f"{hero.formation} · {hero.lift} lift. {hero.storyline}")
 
     pt.section("Recommended Interventions",
                "What to run, on which well, what it costs, and what it protects — "
-               "ranked by risk-weighted NPV. Open any well on Well 360 / Action "
-               "Chain via the sidebar selector.")
+               "ranked by risk-weighted NPV. Select a row to open the well on "
+               "Surveillance and confirm the recommendation against its production.")
     if opportunities.empty:
         st.caption("No value-accretive interventions right now — see the At-Risk "
                    "Watch List below.")
     else:
-        st.dataframe(_intervention_table(opportunities), width="stretch",
-                     hide_index=True)
+        ev_i = st.dataframe(
+            _intervention_table(opportunities, ev_days, nmap, net_view, price),
+            width="stretch", hide_index=True,
+            on_select="rerun", selection_mode="single-row", key="ob_interv_sel")
+        c.handle_row_jump(ev_i, opportunities, "_ob_interv_jump")
         theme.source_note(
             "Intervention + cost come from the AFE component's cost database; "
             "'NPV Basis' flags wells where the full chain economics weren't reachable "
-            "and a transparent proxy was used. ★ marks a fleet-registry hero well.")
+            "and a transparent proxy was used. ★ marks a fleet-registry hero well. "
+            "'Downtime Context' flags wells in an OPEN event from the state machine — "
+            "verify the post-restart rate before acting on those recommendations.")
+    st.caption(c.NO_CHOKE_CAPTION)
 
     pt.section("At-Risk Watch List",
                "Failure signature present, but intervening now destroys value "
@@ -157,17 +205,22 @@ def render() -> None:
                    "value-accretive above or below the no-action thresholds.")
     else:
         w = watch.head(15)
+        w_lbl, w_usd = _deferred_usd_display(w, nmap, net_view, price)
         wt = pd.DataFrame({
             "Well": [f"★ {x}" if h else x for x, h in zip(w["well_id"], w["hero"])],
+            "CTB": w["ctb"],
             "Field": w["basin"] + " · " + w["formation"],
             "Lift": w["lift"],
             "Risk Rank": w["failure_risk_30d"].rank(ascending=False).astype(int),
             "30-Day Risk Signal": w["failure_risk_30d"].map(lambda x: f"{x:.0%}"),
-            "Deferred $/day": w["deferred_usd_per_day"].map(lambda x: f"${x:,.0f}"),
+            w_lbl: w_usd.map(lambda x: f"${x:,.0f}"),
             "Indicated If It Fails": w["recommended_intervention"].str.replace("_", " "),
             "Risked NPV (now)": w["est_risked_npv"].map(lambda x: f"−${abs(x):,.0f}"),
         })
-        st.dataframe(wt, width="stretch", hide_index=True)
+        ev_w = st.dataframe(wt, width="stretch", hide_index=True,
+                            on_select="rerun", selection_mode="single-row",
+                            key="ob_watch_sel")
+        c.handle_row_jump(ev_w, w, "_ob_watch_jump")
         st.caption("'30-Day Risk Signal' is a Platt-calibrated probability from the "
                    "ESP model trained on this fleet's labeled faults (calibrated "
                    "out-of-fold AUROC ≈0.98 on clean synthetic signatures — see Methods). "
@@ -183,13 +236,15 @@ def render() -> None:
     if stable.empty:
         st.caption("No wells in the stable tier on this run.")
     else:
+        s_lbl, s_usd = _deferred_usd_display(stable, nmap, net_view, price)
         sd = pd.DataFrame({
             "Well": [f"★ {w}" if h else w
                      for w, h in zip(stable["well_id"], stable["hero"])],
+            "CTB": stable["ctb"],
             "Field": stable["basin"] + " · " + stable["formation"],
             "Lift": stable["lift"],
             "Lateral (ft)": stable["lateral_length_ft"].map(lambda x: f"{int(x):,}"),
-            "Deferred $/day": stable["deferred_usd_per_day"].map(lambda x: f"${x:,.0f}"),
+            s_lbl: s_usd.map(lambda x: f"${x:,.0f}"),
             "Status": "stable — no action",
         })
         st.dataframe(sd, width="stretch", hide_index=True, height=360)
@@ -200,10 +255,10 @@ def render() -> None:
                    "well on Well 360 for its specific 30-day signal.")
 
     raw = c.board_with_deferred(price, nri)  # display frame (real deferred joined in)
-    st.download_button("Download triage board (CSV)", data=raw.to_csv(index=False),
-                       file_name="ops_triage_board.csv", mime="text/csv",
-                       help="Full ranked board, all tiers — no-action wells carry "
-                            "intervention 'no_action' and opportunity 0.")
+    st.download_button("Download optimization board (CSV)", data=raw.to_csv(index=False),
+                       file_name="ops_optimization_board.csv", mime="text/csv",
+                       help="Full ranked board (unfiltered), all tiers — no-action "
+                            "wells carry intervention 'no_action' and opportunity 0.")
 
     theme.references(["npv", "shap"])
 
@@ -238,18 +293,41 @@ def _ranking_scorecard(board: pd.DataFrame) -> None:
             "labels.csv is a different fleet and doesn't join here).")
 
 
-def _intervention_table(opps: pd.DataFrame) -> pd.DataFrame:
-    """The value-accretive interventions, intervention-and-cost forward."""
+def _deferred_usd_display(frame: pd.DataFrame, nmap: dict, net_view: bool,
+                          price: float) -> tuple[str, pd.Series]:
+    """(column label, $/day series) for the displayed deferred-$ convention:
+    gross (bopd × price) or net entitlement (bopd × price × the WELL's OWN NRI —
+    registry default or the Data-page session override). Display-layer only; the
+    certified ranking columns are untouched."""
+    if net_view:
+        f = frame["well_id"].astype(str).map(lambda w: nmap.get(w, 0.8))
+        return ("Deferred $/day (net, well NRI)",
+                (frame["deferred_bopd"] * price * f).round(0))
+    return "Deferred $/day (gross)", (frame["deferred_bopd"] * price).round(0)
+
+
+def _downtime_context(well_id, ev_days: dict) -> str:
+    n = ev_days.get(str(well_id))
+    return f"⚠ in ongoing event {n}d — verify post-restart" if n else "—"
+
+
+def _intervention_table(opps: pd.DataFrame, ev_days: dict, nmap: dict,
+                        net_view: bool, price: float) -> pd.DataFrame:
+    """The value-accretive interventions, intervention-and-cost forward, with the
+    open-event downtime context beside each recommendation."""
     cost = opps["recommended_intervention"].map(c.intervention_cost)
+    lbl, usd = _deferred_usd_display(opps, nmap, net_view, price)
     return pd.DataFrame({
         "Well": [f"★ {w}" if h else w
                  for w, h in zip(opps["well_id"], opps["hero"])],
         "Recommended Intervention": opps["recommended_intervention"].str.replace("_", " "),
+        "Downtime Context": [_downtime_context(w, ev_days) for w in opps["well_id"]],
         "Est. Cost": cost.map(lambda x: "—" if pd.isna(x) else f"${x:,.0f}"),
         "Risked NPV": opps["est_risked_npv"].map(lambda x: f"${x:,.0f}"),
         "Addressable BOPD": opps["incremental_bopd"].map(lambda x: f"{x:,.0f}"),
-        "Deferred $/day": opps["deferred_usd_per_day"].map(lambda x: f"${x:,.0f}"),
+        lbl: usd.map(lambda x: f"${x:,.0f}"),
         "30-Day Risk": opps["failure_risk_30d"].map(lambda x: f"{x:.0%}"),
+        "CTB": opps["ctb"],
         "Field": opps["basin"] + " · " + opps["formation"],
         "Lift": opps["lift"],
         "NPV Basis": opps["npv_basis"].str.replace("_", " "),
