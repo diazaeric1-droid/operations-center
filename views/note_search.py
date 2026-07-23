@@ -45,6 +45,15 @@ def render() -> None:
     pt.masthead("ops", "Note Search (RAG)",
                 "Ask the operator-note log in plain language. Semantic retrieval "
                 "over a pgvector index, with a cited, LLM-narrated answer.")
+    c.page_purpose(
+        "**The question this page answers: what did we already learn about this "
+        "problem, in our own operator notes?**\n\n"
+        "- **When:** any time a well's behaviour looks familiar — before you "
+        "re-diagnose, search whether pumpers/engineers already wrote it up.\n"
+        "- **Headline read:** the ranked note excerpts with similarity scores; "
+        "every claim in the narrated answer cites the note it came from.\n"
+        "- **Next:** confirm the well's current state on **Surveillance** or "
+        "**Well 360**, then act through the **Action Chain**.")
 
     # --- guard: optional extras + the vector DB ------------------------------
     from rag.engine import deps_available
