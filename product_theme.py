@@ -27,7 +27,7 @@ from theme import (  # re-exported so views need a single import
     NAVY, BLUE, RED, GREEN, AMBER, PURPLE, TEAL, GREY, COLORWAY, CITATIONS,
 )
 
-PRODUCT_VERSION = "0.8.2"
+PRODUCT_VERSION = "0.9.0"
 
 # The three consolidated operator products. Each entry:
 #   (key, display name, tagline, live url)
@@ -48,9 +48,11 @@ COMPONENTS_URL = "https://github.com/diazaeric1-droid"
 ENTERPRISE_CSS = """
 <style>
     /* denser console layout on top of theme.CSS */
+    /* single owner of the main-container top clearance + width (see theme.CSS note) */
     .block-container,
     [data-testid="stMainBlockContainer"],
-    [data-testid="stAppViewBlockContainer"] {padding-top: 4.2rem; max-width: 1500px;}
+    [data-testid="stAppViewBlockContainer"] {padding-top: 4.2rem; padding-bottom: 2rem;
+                                             max-width: 1500px;}
     [data-testid="stMetric"] {padding: 0.45rem 0.7rem; border-radius: 8px;}
     [data-testid="stMetricValue"] {font-size: 1.12rem;}
     [data-testid="stMetricLabel"] {font-size: 0.68rem; letter-spacing: 0.02em;
@@ -216,7 +218,8 @@ def empty_state(message: str, hint: str = "") -> None:
 def product_switcher(current_key: str) -> None:
     """Sidebar cross-product navigation (the M365-style switcher for the trio).
 
-    Call once from app.py's sidebar block, after the product-specific controls."""
+    Call once from app.py, at the TOP of the sidebar — the switcher renders
+    BEFORE the product-specific controls (the portfolio-standard position)."""
     rows = []
     for key, name, tagline, url in PRODUCTS:
         if key == current_key:

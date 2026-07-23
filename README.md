@@ -17,7 +17,7 @@ One of three consolidated operator products in the Upstream Copilot Suite
 | Today | Home | The 6:30am landing: wells scanned, open alerts, deferred $/day, top opportunity |
 | Today | Surveillance | Fleet rate-time + clickable fleet map (click a well to drill down) + CTB/lift/basin/county filters |
 | Today | Optimization Board | The whole fleet ranked by risked-NPV opportunity (tiers, downtime context, drill-through to Surveillance, CSV export) |
-| Today | Morning Brief | Overnight scan: unified ranked list (new + ongoing + resolved, by BO/day) or the classic detailed panels; the brief itself (LLM narration optional) |
+| Today | Morning Brief | Overnight scan: unified ranked list (new + ongoing + resolved, by BOPD) or the classic detailed panels; the brief itself (LLM narration optional) |
 | Today | Ongoing Events | The event state machine — multi-day outages stay ONGOING with running duration + cumulative deferred bbl/$ |
 | Loss Accounting | Deferment Overview | Potential vs actual on the monthly book — downtime vs underperformance waterfall, % deferred |
 | Loss Accounting | Causes & Pareto | Reason-code attribution, $-Pareto by cause, capture rate, classifier eval |
@@ -25,6 +25,24 @@ One of three consolidated operator products in the Upstream Copilot Suite
 | Well File | Well 360 | One well: registry identity, SCADA trends with alert overlays, events, 30-day ESP risk |
 | Well File | Action Chain | Detect → predict → authorize for the selected well; every stage artifact downloadable |
 | Data | Sources & BYOD | Provenance for both datasets + session-only uploads (SCADA fleet, monthly production) |
+
+## In-App Guidance (v0.9.0)
+
+- **Every page opens with an "ℹ️ What is this page for?" popover** — the question
+  the page answers, where it sits in the 6:30am loop, how to read the headline
+  output, and the next page in the spine (plain-PE language; no number removed).
+- **Next steps are links/buttons, not bold text**: Home's "What To Do First"
+  carries one-click *Go →* buttons (the well selection follows automatically),
+  the Optimization Board links straight to the Action Chain, and the
+  Surveillance drill-down ends with Well 360 / Action Chain pointers.
+- **Typed deck inputs**: oil price and NRI are exact `number_input`s (portfolio
+  labels/ranges); well pickers show `well_013 · <name> (<lift>)` labels while
+  values stay raw ids.
+- **SPE exceedance convention**: P10 = high case, P90 = low case on the Action
+  Chain Monte-Carlo (display relabel only; the math is unchanged).
+- **Recovery Work Queue disambiguation**: loss-book wells render as
+  `well_013 (loss book)` — they are NOT the surveillance wells sharing the same
+  id, and the page links (never well-jumps) to the Action Chain.
 
 ## Built On
 

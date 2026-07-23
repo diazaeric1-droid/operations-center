@@ -34,6 +34,21 @@ def render() -> None:
         ("Classifier", "deterministic rules (~92% on the eval set)"
          if not is_real else "N/A on public data — no reason codes"),
     ])
+    c.page_purpose(
+        "**The question this page answers: WHICH causes are costing the most — "
+        "and which vital few would recover most of the money?**\n\n"
+        "- **When:** after the Deferment Overview quantifies the gap — this page "
+        "attributes it, cause by cause (Pareto: the vital few causes carry most "
+        "of the deferred dollars).\n"
+        "- **Headline read:** the $-Pareto bars (blue = recoverable by operator "
+        "action, grey = planned / reservoir / uncaptured) with cumulative % "
+        "overlaid; *Reason-Code Capture* (%) is coverage — how much deferment "
+        "carries a coded cause at all (distinct from the classifier's ~92% "
+        "accuracy on the events it did code).\n"
+        "- **Honest limit:** real public monthly data has no reason codes — "
+        "cause attribution reads N/A there by design.\n"
+        "- **Next:** the **Recovery Work Queue** ranks the recoverable causes "
+        "into per-well jobs.")
     theme.data_badge(*c.loss_badge(source))
 
     import core

@@ -50,19 +50,19 @@ def render() -> None:
     dd = st.columns([3, 2, 2])
     with dd[0]:
         st.selectbox("Drill into well", ids, key="w360_pick", on_change=_sync_well,
-                     help="Jump to any well — keeps the sidebar selection in lockstep.")
+                     format_func=c.well_label,
+                     help="Jump to any well — keeps the sidebar selection in "
+                          "lockstep. The id is portable to Engineering Workbench "
+                          "and Capital Desk.")
     with dd[1]:
         st.metric("API-14", meta.api14)
     with dd[2]:
-        import views
-        ac = views.PAGE_OBJECTS.get("Action Chain")
         st.caption("Next step")
-        if ac is not None:
-            try:
-                st.page_link(ac, label="→ Run the Action Chain",
-                             icon=":material/account_tree:")
-            except Exception:  # noqa: BLE001
-                pass
+        c.next_step("Action Chain", "→ Run the Action Chain",
+                    icon=":material/account_tree:")
+    st.caption("Deeper engineering lenses for this well — nodal, PVT, gas-lift, "
+               "run-life — live in **Engineering Workbench → Well Case File** "
+               "(engineering-workbench.streamlit.app), same well id.")
 
     import core
     alert = c.alert_for_selected(price)
@@ -73,6 +73,21 @@ def render() -> None:
         ("Deck", c.deck_label()),
         ("Today's digest", "flagged" if flagged else "not flagged (fleet scan)"),
     ])
+    c.page_purpose(
+        "**The question this page answers: what is the full story on THIS well — "
+        "status, trends, risk, remaining life, and history — on one page?**\n\n"
+        "- **When:** whenever a well surfaces anywhere in the loop (map click, "
+        "Brief row, board row) and you want the whole picture before acting.\n"
+        "- **Headline read:** the status verdict banner — OPPORTUNITY (act, "
+        "risked NPV $) / AT-RISK WATCH (losing $/day but the fix doesn't pay "
+        "yet) / STABLE (nothing to do) — plus the *30-Day Failure Signal* (a "
+        "Platt-calibrated probability, i.e. the model's raw scores rescaled so "
+        "'60%' really means ~60%).\n"
+        "- **Also here:** the economic limit (the BOPD rate where net revenue = "
+        "lease operating expense — the rate you'd plug & abandon at) and the "
+        "well's work history.\n"
+        "- **Next:** run the **Action Chain** to price and authorize the "
+        "recommended job for this exact well.")
 
     # ---- status verdict (from the board tiers) ---------------------------------
     board = c.board_with_deferred(price, nri)
@@ -107,7 +122,9 @@ def render() -> None:
         f"Daily channels for a {meta.lift} well. Water = gross fluid − oil. The "
         "dashed marker is the date of today's digest alert for this well. The chart "
         f"shows the most recent SCADA window, not the full history since "
-        f"{hist['online_since']} ({hist['years_online']} yr online).")
+        f"{hist['online_since']} ({hist['years_online']} yr online). Dashed "
+        "'Expected decline' on the oil panel = this well's own fitted exponential "
+        "decline — a self-referential trend check, not an offset-well type curve.")
     if flagged:
         st.markdown(f"**{alert['category']}** · severity **{alert['severity']}** — "
                     f"{alert['headline']}")
@@ -213,8 +230,9 @@ def render() -> None:
         st.caption("No open or recently-resolved events for this well on the "
                    "replayed window.")
 
-    st.caption("Next step: run the full detect → predict → authorize flow for this "
-               "well on the **Action Chain** page.")
+    c.next_step("Action Chain",
+                "→ Run the full detect → predict → authorize flow for this well "
+                "(Action Chain)", icon=":material/account_tree:")
     theme.references(["arps", "shap", "npv"])
 
 

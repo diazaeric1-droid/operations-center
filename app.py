@@ -130,25 +130,28 @@ pt.product_switcher("ops")
 with st.sidebar:
     st.subheader("Well File")
     if _well_ids:
-        st.selectbox("Selected well (Well File pages)", _well_ids, key="well_id",
-                     help="Drives Well 360 and Action Chain. Pick from the "
-                          "surveillance fleet; the digest, ESP agent, and AFE "
-                          "chain all key on this id.")
+        st.selectbox("Well", _well_ids, key="well_id", format_func=c.well_label,
+                     help="The console-wide selection — drives Well 360 and the "
+                          "Action Chain, and stays in lockstep with the "
+                          "Surveillance drill-down; map clicks and table "
+                          "row-selects update it. The id is portable to "
+                          "Engineering Workbench and Capital Desk.")
         st.caption(f"Synthetic Permian demo fleet · {len(_well_ids)} wells · "
                    "full provenance on **Sources & BYOD**.")
     st.subheader("Price deck")
-    st.slider("Oil price ($/bbl)", min_value=20.0, max_value=150.0, step=1.0,
-              key="oil_price",
-              help="Realized price — drives deferred-$, the board ranking, and AFE "
-                   "economics.")
-    st.slider("Deck NRI (chain economics)", min_value=0.0, max_value=1.0,
-              step=0.01, key="nri",
-              help="Share of revenue after royalty; nets the revenue side of the "
-                   "board ranking + AFE economics (one auditable number for capital "
-                   "decisions). Per-WELL NRI for the roll-up pages' NET views is "
-                   "edited on Sources & BYOD.")
-    st.caption("Discounting is fixed at **PV10** (10%) — the AFE component's "
-               "certified economics kernel; every NPV on the console uses it.")
+    st.number_input("Oil price ($/bbl)", min_value=0.0, max_value=500.0, step=5.0,
+                    key="oil_price",
+                    help="Realized price — drives deferred-$, the board ranking, "
+                         "and AFE economics. Typed exact value (not a slider) per "
+                         "PE field feedback.")
+    st.number_input("NRI (net revenue interest)", min_value=0.0, max_value=1.0,
+                    step=0.01, key="nri", help=c.NRI_HELP)
+    st.caption("Discounting is fixed at **PV10** (10%/yr effective-annual) — the "
+               "AFE component's certified economics kernel; every NPV on the "
+               "console uses it. Monthly discount factor DF(m) = (1+r)^(m/12), "
+               "not the (1+r/12)^m form that silently compounds to 10.47%.")
+    st.caption("Capital Desk additionally nets severance + ad valorem taxes — its "
+               "NPVs read lower on the same deck (set those there).")
     st.text_input("Anthropic API key (optional)", type="password",
                   key="anthropic_key",
                   help="Session-only, never stored. Powers narrated briefs; every "

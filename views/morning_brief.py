@@ -33,6 +33,20 @@ def render() -> None:
         ("As of", as_of),
         ("Deck", c.deck_label()),
     ])
+    c.page_purpose(
+        "**The question this page answers: what needs eyes this morning, in "
+        "money order?**\n\n"
+        "- **When:** third stop of the 6:30am loop — after Surveillance confirms "
+        "the fleet trend, this is the ranked worklist.\n"
+        "- **Headline read:** the *Unified Priority List* — every new / ongoing / "
+        "just-resolved event plus scan-only anomalies, ONE list ordered by "
+        "today's BOPD impact (× per-well NRI when the NET toggle is on); "
+        "*Deferred $/day (net)* is the same money number Home shows.\n"
+        "- **Select a row** to open that well on Surveillance and confirm the "
+        "signal against its production.\n"
+        "- **Next:** the **Optimization Board** ranks which of these are worth "
+        "capital; *The Brief* below is the same content as a sendable morning "
+        "email.")
     if is_upload:
         theme.data_badge("real", "Your uploaded fleet SCADA — parsed in memory for "
                                  "this session only, nothing stored server-side.")
@@ -65,10 +79,10 @@ def render() -> None:
          "delta_color": "inverse" if div["n_divergences"] else "off",
          "help": "Wells producing materially below their decline-expected rate "
                  "(the digest's decline-aware rate-loss detector)."},
-        {"label": "Deferred at Risk (net)", "value": f"${net_deferred:,.0f}/day",
+        {"label": "Deferred $/day (net)", "value": f"${net_deferred:,.0f}",
          "delta_color": "inverse",
          "help": "Active anomalies' deferred barrels × deck oil price × NRI "
-                 "(net-to-operator)."},
+                 "(net-to-operator) — the same number, same name, as Home."},
     ])
     fs = st.columns(4)
     fs[0].metric("Fleet Oil Rate", f"{summary['total_bopd']:,.0f} BOPD")
@@ -84,9 +98,10 @@ def render() -> None:
                  horizontal=True,
                  help="Unified list (default): ONE ranked list — new, ongoing, and "
                       "just-resolved events plus scan-only anomalies — ordered by "
-                      "BO/day impact. Detailed panels: the classic three-panel "
+                      "BOPD impact. Detailed panels: the classic three-panel "
                       "layout (wells down / divergences, ranked anomalies, "
-                      "acknowledged).")
+                      "acknowledged). Display only — no number changes between "
+                      "views.")
     with vc2:
         net_view = c.gross_net_toggle()
     if st.session_state.get("brief_view", "Unified list") == "Detailed panels":
@@ -101,12 +116,12 @@ def render() -> None:
 
 def _unified_list(events, active, net_view: bool, price: float) -> None:
     """OC4: one ranked list — events (NEW / ONGOING / RESOLVED) + scan-only
-    anomalies, ordered by today's BO/day impact (net of per-well NRI when the NET
+    anomalies, ordered by today's BOPD impact (net of per-well NRI when the NET
     toggle is on). Select a row to open the well on Surveillance."""
     pt.section("Unified Priority List",
                "Everything that needs eyes, in ONE list: new + ongoing + "
                "just-resolved events and scan-only anomalies, ordered by today's "
-               "BO/day impact.")
+               "BOPD impact.")
     nmap = c.nri_map({str(e.well_id) for e in (events or [])}
                      | {str(a.well_id) for a in (active or [])})
     df = c.unified_brief_frame(events, active, nmap, net_view, price)
@@ -129,18 +144,34 @@ def _unified_list(events, active, net_view: bool, price: float) -> None:
         "Status": df["status"].map(badge),
         "Event / Category": df["kind"].str.replace("_", " "),
         "Days": df["days"].map(lambda v: "—" if pd.isna(v) else f"{int(v)}d"),
-        "BO/day (gross)": df["gross_bopd"].map(lambda v: f"{v:,.1f}"),
-        "BO/day (net, well NRI)": df["net_bopd"].map(lambda v: f"{v:,.1f}"),
+        "BOPD (gross)": df["gross_bopd"].map(lambda v: f"{v:,.1f}"),
+        "BOPD (net, well NRI)": df["net_bopd"].map(lambda v: f"{v:,.1f}"),
         usd_lbl: df["usd_per_day"].map(lambda v: f"${v:,.0f}"),
         "Cum. deferred bbl": df["cum_bbl"].map(
             lambda v: "—" if pd.isna(v) else f"{v:,.0f}"),
     })
     ev = st.dataframe(show, width="stretch", hide_index=True,
                       on_select="rerun", selection_mode="single-row",
-                      key="mb_unified")
+                      key="mb_unified",
+                      column_config={
+                          "Days": st.column_config.TextColumn(
+                              help="The event's running duration from the state "
+                                   "machine; scan-only anomalies have no event "
+                                   "yet ('—')."),
+                          "BOPD (gross)": st.column_config.TextColumn(
+                              help="Today's deferred oil, gross (8/8 working "
+                                   "interest) — the digest's native convention."),
+                          "BOPD (net, well NRI)": st.column_config.TextColumn(
+                              help="Today's deferred oil × the well's OWN NRI "
+                                   "(registry default, editable on Sources & "
+                                   "BYOD)."),
+                          "Cum. deferred bbl": st.column_config.TextColumn(
+                              help="Barrels deferred over the event's whole life, "
+                                   "not just today."),
+                      })
     c.handle_row_jump(ev, df, "_mb_jump")
     theme.source_note(
-        f"Ordered by {'NET' if net_view else 'GROSS'} BO/day (today's deferral; "
+        f"Ordered by {'NET' if net_view else 'GROSS'} BOPD (today's deferral; "
         "resolved events close out at 0 and fall to the bottom), status as the "
         "tiebreaker. NET = × each well's OWN NRI (registry default, editable on "
         "Sources & BYOD); GROSS is the digest's native 8/8 convention. Where a well "
@@ -160,23 +191,35 @@ def _detailed_panels(div, active, acked, anomalies, price: float,
     dcol, vcol = st.columns(2)
     with dcol:
         if div["down"]:
-            dd = pd.DataFrame(div["down"])[["well_id", "last_bopd", "baseline_bopd"]]
-            dd.columns = ["Well", "Latest BOPD", "Baseline BOPD"]
-            st.dataframe(dd, width="stretch", hide_index=True, height=240)
+            src_dd = pd.DataFrame(div["down"])[["well_id", "last_bopd",
+                                                "baseline_bopd"]]
+            dd = src_dd.rename(columns={"well_id": "Well",
+                                        "last_bopd": "Latest BOPD",
+                                        "baseline_bopd": "Baseline BOPD"})
+            ev_dd = st.dataframe(dd, width="stretch", hide_index=True, height=240,
+                                 on_select="rerun", selection_mode="single-row",
+                                 key="mb_down_sel")
+            c.handle_row_jump(ev_dd, src_dd, "_mb_down_jump")
+            st.caption("Select a row to open the well on Surveillance.")
         else:
             st.success("No wells down — every well is producing on the latest day.")
     with vcol:
         if div["divergences"]:
-            vv = pd.DataFrame([
-                {"Well": a.well_id, "Category": a.category,
-                 "Deferred bopd": round(getattr(a, "deferred_bopd", 0.0), 1),
+            src_vv = pd.DataFrame([
+                {"well_id": a.well_id, "Category": a.category,
+                 "Deferred BOPD": round(getattr(a, "deferred_bopd", 0.0), 1),
                  "Deferred $/day (net)": round(
                      float(getattr(a, "deferred_bopd", 0.0) or 0.0) * price * nri, 0)}
                 for a in div["divergences"]])
-            st.dataframe(vv, width="stretch", hide_index=True, height=240,
-                         column_config={
-                             "Deferred $/day (net)":
-                                 st.column_config.NumberColumn(format="$%d")})
+            vv = src_vv.rename(columns={"well_id": "Well"})
+            ev_vv = st.dataframe(vv, width="stretch", hide_index=True, height=240,
+                                 on_select="rerun", selection_mode="single-row",
+                                 key="mb_div_sel",
+                                 column_config={
+                                     "Deferred $/day (net)":
+                                         st.column_config.NumberColumn(format="$%d")})
+            c.handle_row_jump(ev_vv, src_vv, "_mb_div_jump")
+            st.caption("Select a row to open the well on Surveillance.")
         else:
             st.success("No production divergences — every well is on its decline curve.")
 
@@ -204,18 +247,24 @@ def _detailed_panels(div, active, acked, anomalies, price: float,
                 "Deferred barrels come from the digest's decline-aware detector "
                 "(decline-expected rate − actual), money-first.")
 
-        table = pd.DataFrame([
-            {"Well": a.well_id, "Severity": a.severity, "Category": a.category,
+        src_tbl = pd.DataFrame([
+            {"well_id": a.well_id, "Severity": a.severity, "Category": a.category,
              "Deferred $/day (net)": (f"${float(a.deferred_bopd) * price * nri:,.0f}"
                                       if a.deferred_bopd else "—"),
              "Headline": a.headline,
              "Recommended Action": a.recommended_action}
             for a in active
         ])
+        table = (src_tbl.rename(columns={"well_id": "Well"}) if len(src_tbl)
+                 else src_tbl)
         if table.empty:
             st.caption("Every anomaly on the latest scan is acknowledged/suppressed.")
         else:
-            st.dataframe(table, width="stretch", hide_index=True)
+            ev_tbl = st.dataframe(table, width="stretch", hide_index=True,
+                                  on_select="rerun", selection_mode="single-row",
+                                  key="mb_anom_sel")
+            c.handle_row_jump(ev_tbl, src_tbl, "_mb_anom_jump")
+            st.caption("Select a row to open the well on Surveillance.")
             st.download_button("Download anomaly list (CSV)",
                                data=table.to_csv(index=False),
                                file_name="ops_anomalies.csv", mime="text/csv")
@@ -279,7 +328,7 @@ def _the_brief(token: str, price: float, nri: float, as_of: str, summary,
     if narrated:
         st.caption("LLM-narrated (session only). The deterministic detectors and "
                    "numbers underneath are unchanged.")
-    st.download_button("Download brief (markdown)", data=final_brief,
+    st.download_button("Download brief (Markdown)", data=final_brief,
                        file_name=f"ops_morning_brief_{as_of}.md",
                        mime="text/markdown")
 
